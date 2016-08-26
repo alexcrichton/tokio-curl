@@ -16,7 +16,7 @@ use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle};
 use futures::{Future, Poll, oneshot, Oneshot, Complete};
 use futures::task::{Task, Notify};
-use futures_mio::LoopPin;
+use tokio_core::LoopPin;
 use self::winapi::fd_set;
 
 #[derive(Clone)]
