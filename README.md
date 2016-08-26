@@ -6,7 +6,7 @@ libcurl.
 [![Build Status](https://travis-ci.org/tokio-rs/tokio-curl.svg?branch=master)](https://travis-ci.org/tokio-rs/tokio-curl)
 [![Build status](https://ci.appveyor.com/api/projects/status/1uqcw7g5e5ah3or2?svg=true)](https://ci.appveyor.com/project/alexcrichton/tokio-curl)
 
-[Documentation](http://alexcrichton.com/futures-rs/futures_curl)
+[Documentation](https://tokio-rs.github.io/tokio-curl)
 
 ## Usage
 
