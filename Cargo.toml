@@ -1,27 +1,26 @@
 [package]
-name = "futures-curl"
+name = "tokio-curl"
 version = "0.1.0"
 authors = ["Alex Crichton <alex@alexcrichton.com>"]
 license = "MIT/Apache-2.0"
-repository = "https://github.com/alexcrichton/futures-rs"
-homepage = "https://github.com/alexcrichton/futures-rs"
-documentation = "http://alexcrichton.com/futures-rs/futures_curl/"
+repository = "https://github.com/tokio-rs/tokio-curl"
+homepage = "https://github.com/tokio-rs/tokio-curl"
+documentation = "https://tokio-rs.github.io/tokio-curl"
 description = """
 An implementation of an asynchronous HTTP client using futures backed by
 libcurl.
 """
 
 [dependencies]
-curl = { git = "https://github.com/alexcrichton/curl-rust" }
-futures = { path = "..", version = "0.1" }
-futures-mio = { path = "../futures-mio", version = "0.1" }
+curl = "0.3.5"
+futures = { git = "https://github.com/alexcrichton/futures-rs" }
+tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
 log = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 mio = { git = "https://github.com/carllerche/mio" }
 slab = "0.2"
-futures-io = { path = "../futures-io", version = "0.1" }
 scoped-tls = "0.1"
 
 [target.'cfg(windows)'.dependencies]

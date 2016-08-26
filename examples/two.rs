@@ -3,16 +3,16 @@
 //! This example will fetch the rust-lang home page as well as GitHub's home
 //! page. Both transfers are executed in parallel one thread using futures.
 
-extern crate env_logger;
 extern crate curl;
+extern crate env_logger;
 extern crate futures;
-extern crate futures_curl;
-extern crate futures_mio;
+extern crate tokio_core;
+extern crate tokio_curl;
 
 use curl::easy::Easy;
 use futures::Future;
-use futures_mio::Loop;
-use futures_curl::Session;
+use tokio_core::Loop;
+use tokio_curl::Session;
 
 fn main() {
     env_logger::init().unwrap();

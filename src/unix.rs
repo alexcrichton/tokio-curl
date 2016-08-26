@@ -15,7 +15,7 @@ use curl::multi::{Multi, EasyHandle, Socket, SocketEvents, Events};
 use futures::{self, Future, Poll, Oneshot, Complete};
 use futures::task;
 use futures::stream::{Stream, Fuse};
-use futures_mio::{LoopPin, Timeout, ReadinessStream, Sender, Receiver};
+use tokio_core::{LoopPin, Timeout, ReadinessStream, Sender, Receiver};
 use self::mio::unix::EventedFd;
 use self::slab::Slab;
 

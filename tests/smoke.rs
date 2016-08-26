@@ -1,16 +1,16 @@
-extern crate env_logger;
 extern crate curl;
+extern crate env_logger;
 extern crate futures;
-extern crate futures_curl;
-extern crate futures_mio;
+extern crate tokio_core;
+extern crate tokio_curl;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use curl::easy::Easy;
 use futures::Future;
-use futures_mio::Loop;
-use futures_curl::Session;
+use tokio_core::Loop;
+use tokio_curl::Session;
 
 #[test]
 fn download_rust_lang() {

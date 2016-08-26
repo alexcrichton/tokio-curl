@@ -10,15 +10,15 @@
 //! ```rust
 //! extern crate curl;
 //! extern crate futures;
-//! extern crate futures_curl;
-//! extern crate futures_mio;
+//! extern crate tokio_core;
+//! extern crate tokio_curl;
 //!
 //! use std::io::{self, Write};
 //!
 //! use curl::easy::Easy;
 //! use futures::Future;
-//! use futures_mio::Loop;
-//! use futures_curl::Session;
+//! use tokio_core::Loop;
+//! use tokio_curl::Session;
 //!
 //! fn main() {
 //!     // Create an event loop that we'll run on, as well as an HTTP `Session`
@@ -60,15 +60,12 @@
 extern crate log;
 #[macro_use]
 extern crate futures;
-extern crate futures_mio;
+extern crate tokio_core;
 extern crate curl;
 
 #[macro_use]
 #[cfg(unix)]
 extern crate scoped_tls;
-#[macro_use]
-#[cfg(unix)]
-extern crate futures_io;
 
 #[cfg(windows)]
 #[path = "windows.rs"]
@@ -82,7 +79,7 @@ use std::io;
 use futures::{Future, Poll};
 use curl::Error;
 use curl::easy::Easy;
-use futures_mio::LoopPin;
+use tokio_core::LoopPin;
 
 /// A shared cache for HTTP requests to pool data such as TCP connections
 /// between.

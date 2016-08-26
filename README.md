@@ -1,10 +1,10 @@
-# futures-curl
+# tokio-curl
 
 An implementation of an asynchronous HTTP client using futures backed by
 libcurl.
 
-[![Build Status](https://travis-ci.org/alexcrichton/futures-rs.svg?branch=master)](https://travis-ci.org/alexcrichton/futures-rs)
-[![Build status](https://ci.appveyor.com/api/projects/status/yl5w3ittk4kggfsh?svg=true)](https://ci.appveyor.com/project/alexcrichton/futures-rs)
+[![Build Status](https://travis-ci.org/tokio-rs/tokio-curl.svg?branch=master)](https://travis-ci.org/tokio-rs/tokio-curl)
+[![Build status](https://ci.appveyor.com/api/projects/status/1uqcw7g5e5ah3or2?svg=true)](https://ci.appveyor.com/project/alexcrichton/tokio-curl)
 
 [Documentation](http://alexcrichton.com/futures-rs/futures_curl)
 
@@ -14,18 +14,18 @@ First, add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-futures-curl = { git = "https://github.com/alexcrichton/futures-rs" }
+tokio-curl = { git = "https://github.com/tokio-rs/tokio-curl" }
 ```
 
 Next, add this to your crate:
 
 ```rust
-extern crate futures_curl;
+extern crate tokio_curl;
 ```
 
 # License
 
-`futures-curl` is primarily distributed under the terms of both the MIT
+`tokio-curl` is primarily distributed under the terms of both the MIT
 license and the Apache License (Version 2.0), with portions covered by various
 BSD-like licenses.
 
