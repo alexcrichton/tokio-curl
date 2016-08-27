@@ -455,7 +455,7 @@ impl mio::Evented for MioSocket {
     fn register(&self,
                 poll: &mio::Poll,
                 token: mio::Token,
-                interest: mio::EventSet,
+                interest: mio::Ready,
                 opts: mio::PollOpt) -> io::Result<()> {
         EventedFd(&self.inner).register(poll, token, interest, opts)
     }
@@ -463,7 +463,7 @@ impl mio::Evented for MioSocket {
     fn reregister(&self,
                   poll: &mio::Poll,
                   token: mio::Token,
-                  interest: mio::EventSet,
+                  interest: mio::Ready,
                   opts: mio::PollOpt) -> io::Result<()> {
         EventedFd(&self.inner).reregister(poll, token, interest, opts)
     }
