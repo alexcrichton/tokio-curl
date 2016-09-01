@@ -86,7 +86,7 @@ impl Session {
         }).unwrap();
 
         let pin2 = pin.clone();
-        pin.add_loop_data(rx.and_then(|rx| {
+        pin.spawn(rx.and_then(|rx| {
             Data {
                 rx: rx.fuse(),
                 multi: m,
@@ -97,7 +97,9 @@ impl Session {
                     io: HashMap::new(),
                 }),
             }
-        })).forget();
+        }).map_err(|e| {
+            panic!("error while processing http requests: {}", e)
+        }));
 
         Session { tx: tx }
     }
@@ -376,7 +378,7 @@ impl Future for Data {
                     state.stream.need_write();
                     continue
                 }
-                task::poll_on(self.pin.executor());
+                task::park().unpark();
             }
 
             // Process a timeout, if one ocurred.
