@@ -15,7 +15,7 @@ use curl::Error;
 use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle};
 use futures::{Future, Poll, oneshot, Oneshot, Complete};
-use futures::task::{Task, Notify};
+use futures::task::{self, Unpark};
 use tokio_core::LoopPin;
 use self::winapi::fd_set;
 
@@ -106,7 +106,7 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
     let mut active = Vec::new();
     let mut rx_done = false;
     let mut to_remove = Vec::new();
-    let mut task = Task::new_notify(MyNotify { inner: tx.inner });
+    let unpark = Arc::new(MyUnpark { inner: tx.inner });
 
     loop {
         trace!("turn of the loop");
@@ -134,7 +134,8 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
 
         to_remove.truncate(0);
         for (i, &mut (_, ref mut complete)) in active.iter_mut().enumerate() {
-            match task.enter(|| complete.poll_cancel()) {
+            let mut t = task::spawn(CheckCancel { inner: complete });
+            match t.poll_future(unpark.clone()) {
                 Poll::Ok(()) => to_remove.push(i),
                 _ => {}
             }
@@ -221,12 +222,12 @@ impl<T> Sender<T> {
     }
 }
 
-struct MyNotify {
+struct MyUnpark {
     inner: Arc<Channel>,
 }
 
-impl Notify for MyNotify {
-    fn notify(&self) {
+impl Unpark for MyUnpark {
+    fn unpark(&self) {
         self.inner.notify()
     }
 }
@@ -266,5 +267,18 @@ impl<T> Receiver<T> {
             }
         }
         return true
+    }
+}
+
+struct CheckCancel<'a, T: 'a> {
+    inner: &'a mut Complete<T>,
+}
+
+impl<'a, T> Future for CheckCancel<'a, T> {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), ()> {
+        self.inner.poll_cancel()
     }
 }
