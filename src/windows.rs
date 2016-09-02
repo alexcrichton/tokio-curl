@@ -14,7 +14,7 @@ use std::time::Duration;
 use curl::Error;
 use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle};
-use futures::{Future, Poll, oneshot, Oneshot, Complete};
+use futures::{Future, Poll, oneshot, Oneshot, Complete, Async};
 use futures::task::{self, Unpark};
 use tokio_core::LoopPin;
 use self::winapi::fd_set;
@@ -94,9 +94,10 @@ impl Future for Perform {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, io::Error> {
-        match try_poll!(self.inner.poll()) {
-            Ok(res) => res.into(),
-            Err(_) => panic!("complete canceled?"),
+        match self.inner.poll().expect("canceled") {
+            Async::Ready(Ok(res)) => Ok(res.into()),
+            Async::Ready(Err(e)) => Err(e),
+            Async::NotReady => Ok(Async::NotReady),
         }
     }
 }
@@ -135,9 +136,8 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
         to_remove.truncate(0);
         for (i, &mut (_, ref mut complete)) in active.iter_mut().enumerate() {
             let mut t = task::spawn(CheckCancel { inner: complete });
-            match t.poll_future(unpark.clone()) {
-                Poll::Ok(()) => to_remove.push(i),
-                _ => {}
+            if let Ok(Async::Ready(())) = t.poll_future(unpark.clone()) {
+                to_remove.push(i);
             }
         }
         for i in to_remove.drain(..).rev() {
