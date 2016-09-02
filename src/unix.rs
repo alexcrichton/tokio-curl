@@ -12,7 +12,7 @@ use std::time::Duration;
 use curl::{self, Error};
 use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle, Socket, SocketEvents, Events};
-use futures::{self, Future, Poll, Oneshot, Complete};
+use futures::{self, Future, Poll, Oneshot, Complete, Async};
 use futures::task;
 use futures::stream::{Stream, Fuse};
 use tokio_core::{LoopPin, Timeout, ReadinessStream, Sender, Receiver};
@@ -132,16 +132,15 @@ impl Data {
             debug!("scheduling a new timeout in {:?}", dur);
             let mut timeout = self.pin.handle().clone().timeout(dur);
             let mut timeout = match timeout.poll() {
-                Poll::Ok(timeout) => timeout,
+                Ok(Async::Ready(timeout)) => timeout,
                 _ => panic!("event loop should finish poll immediately"),
             };
             drop(state);
-            let res = timeout.poll();
+            let res = timeout.poll().unwrap();
             state = self.state.borrow_mut();
             match res {
-                Poll::NotReady => state.timeout = Some(timeout),
-                Poll::Ok(()) => panic!("timeout done immediately?"),
-                Poll::Err(e) => panic!("timeout poll error: {}", e),
+                Async::NotReady => state.timeout = Some(timeout),
+                Async::Ready(()) => panic!("timeout done immediately?"),
             }
         }
 
@@ -182,8 +181,8 @@ impl Data {
             let source = MioSocket { inner: socket };
             let mut ready = ReadinessStream::new(self.pin.handle().clone(),
                                                  source);
-            let stream = match ready.poll() {
-                Poll::Ok(stream) => stream,
+            let stream = match ready.poll().unwrap() {
+                Async::Ready(stream) => stream,
                 _ => panic!("event loop should finish poll immediately"),
             };
             state.io.insert(socket, SocketState {
@@ -213,11 +212,10 @@ impl Future for Data {
         // First up, process anything in our message queue. This is where we
         // field new incoming requests and schedule them on our `multi` handle.
         loop {
-            let msg = match self.rx.poll() {
-                Poll::Ok(Some(msg)) => msg,
-                Poll::Ok(None) => break,
-                Poll::Err(e) => return Poll::Err(e),
-                Poll::NotReady => break,
+            let msg = match try!(self.rx.poll()) {
+                Async::Ready(Some(msg)) => msg,
+                Async::Ready(None) => break,
+                Async::NotReady => break,
             };
             match msg {
                 Message::Execute(easy, tx) => {
@@ -257,7 +255,7 @@ impl Future for Data {
             let mut state = self.state.borrow_mut();
             let mut to_remove = Vec::new();
             for entry in state.complete.iter_mut() {
-                if let Poll::Ok(()) = entry.complete.poll_cancel() {
+                if let Ok(Async::Ready(())) = entry.complete.poll_cancel() {
                     to_remove.push(entry.idx);
                 }
             }
@@ -285,12 +283,12 @@ impl Future for Data {
 
             let mut e = Events::new();
             let mut set = false;
-            if let Poll::Ok(()) = state.stream.poll_read() {
+            if let Async::Ready(()) = try!(state.stream.poll_read()) {
                 debug!("\treadable");
                 e.input(true);
                 set = true;
             }
-            if let Poll::Ok(()) = state.stream.poll_write() {
+            if let Async::Ready(()) = try!(state.stream.poll_write()) {
                 debug!("\twritable");
                 e.output(true);
                 set = true;
@@ -388,7 +386,7 @@ impl Future for Data {
             // happened.
             let mut timeout = false;
             if let Some(ref mut t) = self.state.borrow_mut().timeout {
-                if let Poll::Ok(()) = t.poll() {
+                if let Ok(Async::Ready(())) = t.poll() {
                     timeout = true;
                 }
             }
@@ -430,9 +428,9 @@ impl Future for Data {
         });
 
         if self.rx.is_done() && self.state.borrow().complete.is_empty() {
-            Poll::Ok(())
+            Ok(().into())
         } else {
-            Poll::NotReady
+            Ok(Async::NotReady)
         }
     }
 }
@@ -442,9 +440,10 @@ impl Future for Perform {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, io::Error> {
-        match try_poll!(self.inner.poll()) {
-            Ok(res) => res.into(),
-            Err(_) => panic!("complete canceled?"),
+        match self.inner.poll().expect("complete canceled") {
+            Async::Ready(Ok(res)) => Ok(res.into()),
+            Async::Ready(Err(e)) => Err(e),
+            Async::NotReady => Ok(Async::NotReady),
         }
     }
 }

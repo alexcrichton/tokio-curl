@@ -13,8 +13,8 @@ libcurl.
 
 [dependencies]
 curl = "0.3.5"
-futures = { git = "https://github.com/alexcrichton/futures-rs" }
-tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
+futures = { git = "https://github.com/alexcrichton/futures-rs", branch = "new-poll" }
+tokio-core = { git = "https://github.com/tokio-rs/tokio-core", branch = "new-poll" }
 log = "0.3"
 
 [target.'cfg(unix)'.dependencies]
