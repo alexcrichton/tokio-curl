@@ -92,7 +92,7 @@ impl Session {
                 multi: m,
                 pin: pin2,
                 state: RefCell::new(State {
-                    complete: Slab::new(128),
+                    complete: Slab::with_capacity(128),
                     timeout: None,
                     io: HashMap::new(),
                 }),
@@ -234,8 +234,8 @@ impl Future for Data {
                     };
                     let mut state = self.state.borrow_mut();
                     if state.complete.vacant_entry().is_none() {
-                        let amt = state.complete.count();
-                        state.complete.grow(amt);
+                        let amt = state.complete.len();
+                        state.complete.reserve_exact(amt);
                     }
                     let entry = state.complete.vacant_entry().unwrap();
                     let idx = entry.index();
