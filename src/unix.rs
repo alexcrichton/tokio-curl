@@ -1,5 +1,3 @@
-// TODO: handle level a bit better by turning the event loop every so often
-
 extern crate libc;
 extern crate mio;
 extern crate slab;
