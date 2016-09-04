@@ -34,8 +34,7 @@ fn download_rust_lang() {
         true
     }).unwrap();
 
-    let requests = session.perform(req).map(move |(mut resp, err)| {
-        assert!(err.is_none());
+    let requests = session.perform(req).map(move |mut resp| {
         assert_eq!(resp.response_code().unwrap(), 200);
         let response = response.lock().unwrap();
         let response = String::from_utf8_lossy(&response);
@@ -56,13 +55,12 @@ fn timeout_download_rust_lang() {
     req.get(true).unwrap();
     req.url("https://www.rust-lang.org").unwrap();
     req.write_function(|data| Ok(data.len())).unwrap();
-    let req = session.perform(req);
+    let req = session.perform(req).map_err(|err| err.into_error());
 
     let timeout = lp.handle().timeout(Duration::from_millis(5)).flatten();
     let result = req.map(Ok).select(timeout.map(Err)).then(|res| {
         match res {
-            Ok((Ok((_, err)), _)) => {
-                assert!(err.is_none());
+            Ok((Ok(_), _)) => {
                 panic!("should have timed out");
             }
             Ok((Err(()), _)) => futures::finished::<(), ()>(()),
