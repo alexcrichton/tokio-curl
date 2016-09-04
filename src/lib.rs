@@ -41,8 +41,8 @@
 //!
 //!     // Execute the request, and print the response code as well as the error
 //!     // that happened (if any).
-//!     let (mut req, err) = lp.run(request).unwrap();
-//!     println!("{:?} {:?}", req.response_code(), err);
+//!     let mut req = lp.run(request).unwrap();
+//!     println!("{:?}", req.response_code());
 //! }
 //! ```
 //!
@@ -74,10 +74,13 @@ mod imp;
 #[path = "unix.rs"]
 mod imp;
 
+mod stack;
+
+use std::error;
+use std::fmt;
 use std::io;
 
-use futures::{Future, Poll};
-use curl::Error;
+use futures::{Future, Poll, Async};
 use curl::easy::Easy;
 use tokio_core::LoopPin;
 
@@ -101,6 +104,15 @@ pub struct Session {
 /// complete so metadata about the request can be inspected.
 pub struct Perform {
     inner: imp::Perform,
+}
+
+/// Error returned by the future returned from `perform`.
+///
+/// This error can be converted to an `io::Error` or the underlying `Easy`
+/// handle may also be extracted.
+pub struct PerformError {
+    error: io::Error,
+    handle: Option<Easy>,
 }
 
 impl Session {
@@ -145,10 +157,75 @@ impl Session {
 }
 
 impl Future for Perform {
-    type Item = (Easy, Option<Error>);
-    type Error = io::Error;
+    type Item = Easy;
+    type Error = PerformError;
 
-    fn poll(&mut self) -> Poll<Self::Item, io::Error> {
-        self.inner.poll()
+    fn poll(&mut self) -> Poll<Easy, PerformError> {
+        match self.inner.poll() {
+            Err(e) => Err(PerformError { error: e, handle: None }),
+            Ok(Async::Ready((handle, None))) => Ok(Async::Ready(handle)),
+            Ok(Async::Ready((handle, Some(err)))) => {
+                Err(PerformError { error: err.into(), handle: Some(handle) })
+            }
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+        }
+    }
+}
+
+impl PerformError {
+    /// Attempts to extract the underlying `Easy` handle, if one is available.
+    ///
+    /// For some HTTP requests that fail the `Easy` handle is still available to
+    /// recycle for another request. Additionally, the handle may contain
+    /// information about the failed request. If this is needed, then this
+    /// method can be called to extract the easy handle.
+    ///
+    /// Note that not all failed HTTP requests will have an easy handle
+    /// available to return. Some requests may end up destroying the original
+    /// easy handle as it couldn't be reclaimed.
+    pub fn take_easy(&mut self) -> Option<Easy> {
+        self.handle.take()
+    }
+
+    /// Returns the underlying I/O error that caused this error.
+    ///
+    /// All `PerformError` structures will have an associated I/O error with
+    /// them. This error indicates why the HTTP request failed, and is likely
+    /// going to be backed by a `curl::Error` or a `curl::MultiError`.
+    ///
+    /// It's also likely if it is available the `Easy` handle recovered from
+    /// `take_handle` will have even more detailed information about the error.
+    pub fn into_error(self) -> io::Error {
+        self.error
+    }
+}
+
+impl From<PerformError> for io::Error {
+    fn from(p: PerformError) -> io::Error {
+        p.into_error()
+    }
+}
+
+impl fmt::Display for PerformError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        "failed to execute request".fmt(f)
+    }
+}
+
+impl fmt::Debug for PerformError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("PerformError")
+         .field("error", &self.error)
+         .finish()
+    }
+}
+
+impl error::Error for PerformError {
+    fn description(&self) -> &str {
+        "failed to execute request"
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        Some(&self.error)
     }
 }

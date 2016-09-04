@@ -37,7 +37,7 @@ fn main() {
 
     // Run both requests, waiting for them to finish. Once done we print out
     // their response codes and errors.
-    let ((mut a, aerr), (mut b, berr)) = lp.run(requests).unwrap();
-    println!("{:?} {:?}", a.response_code(), aerr);
-    println!("{:?} {:?}", b.response_code(), berr);
+    let (mut a, mut b) = lp.run(requests).unwrap();
+    println!("{:?}", a.response_code());
+    println!("{:?}", b.response_code());
 }
