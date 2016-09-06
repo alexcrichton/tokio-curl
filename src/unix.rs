@@ -53,7 +53,6 @@ struct State {
 struct HandleEntry {
     complete: Complete<io::Result<(Easy, Option<Error>)>>,
     handle: EasyHandle,
-    idx: usize,
 }
 
 struct SocketEntry {
@@ -289,7 +288,7 @@ impl Data {
             // request. This may entail libcurl requesting a new timeout or new
             // sockets to be tracked as part of the call to `add`.
             debug!("executing a new request");
-            let handle = match DATA.set(self, || self.multi.add(easy)) {
+            let mut handle = match DATA.set(self, || self.multi.add(easy)) {
                 Ok(handle) => handle,
                 Err(e) => {
                     tx.complete(Err(e.into()));
@@ -306,10 +305,10 @@ impl Data {
             }
             let entry = state.handles.vacant_entry().unwrap();
             let index = entry.index();
+            handle.set_token(index).unwrap();
             entry.insert(HandleEntry {
                 complete: tx,
                 handle: handle,
-                idx: index,
             });
 
             // Enqueue a request to poll the state of the `complete` half so we
@@ -424,15 +423,11 @@ impl Data {
         self.multi.messages(|m| {
             let mut state = self.state.borrow_mut();
             let transfer_err = m.result().unwrap();
-            // TODO: shouldn't have to iterate `complete` for each completed
-            //       result, we should know directly where to go.
-            let idx = state.handles.iter()
-                                   .find(|e| m.is_for(&e.handle))
-                                   .expect("complete but handle not here")
-                                   .idx;
+            let idx = m.token().unwrap();
             let entry = state.handles.remove(idx).unwrap();
             debug!("request is now finished: {}", idx);
             drop(state);
+            assert!(m.is_for(&entry.handle));
 
             // If `remove_err` fails then that's super fatal, so that'll end
             // up in the `Error` of the `Perform` future. If, however, the
