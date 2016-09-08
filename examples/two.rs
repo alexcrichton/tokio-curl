@@ -11,14 +11,14 @@ extern crate tokio_curl;
 
 use curl::easy::Easy;
 use futures::Future;
-use tokio_core::Loop;
+use tokio_core::reactor::Core;
 use tokio_curl::Session;
 
 fn main() {
     env_logger::init().unwrap();
 
-    let mut lp = Loop::new().unwrap();
-    let session = Session::new(lp.pin());
+    let mut lp = Core::new().unwrap();
+    let session = Session::new(lp.handle());
 
     // Once we've got our session available to us, execute our two requests.
     // Each request will be a GET request and for now we just ignore the actual

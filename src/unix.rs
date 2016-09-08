@@ -13,7 +13,8 @@ use curl::multi::{Multi, EasyHandle, Socket, SocketEvents, Events};
 use futures::{self, Future, Poll, Oneshot, Complete, Async};
 use futures::task::{self, EventSet, UnparkEvent};
 use futures::stream::{Stream, Fuse};
-use tokio_core::{LoopPin, Timeout, ReadinessStream, Sender, Receiver};
+use tokio_core::reactor::{Timeout, Handle, PollEvented};
+use tokio_core::channel::{channel, Sender, Receiver};
 use self::mio::unix::EventedFd;
 use self::slab::Slab;
 
@@ -31,7 +32,7 @@ enum Message {
 struct Data {
     multi: Multi,
     state: RefCell<State>,
-    pin: LoopPin,
+    handle: Handle,
     rx: Fuse<Receiver<Message>>,
     stack: Arc<Stack<usize>>,
 }
@@ -58,7 +59,7 @@ struct HandleEntry {
 struct SocketEntry {
     want: Option<SocketEvents>,
     changed: bool,
-    stream: ReadinessStream<MioSocket>,
+    stream: PollEvented<MioSocket>,
 }
 
 scoped_thread_local!(static DATA: Data);
@@ -68,10 +69,10 @@ pub struct Perform {
 }
 
 impl Session {
-    pub fn new(pin: LoopPin) -> Session {
+    pub fn new(handle: Handle) -> Session {
         let mut m = Multi::new();
 
-        let (tx, rx) = pin.handle().clone().channel();
+        let (tx, rx) = channel(&handle).unwrap();
 
         m.timer_function(move |dur| {
             DATA.with(|d| d.schedule_timeout(dur))
@@ -81,20 +82,17 @@ impl Session {
             DATA.with(|d| d.schedule_socket(socket, events, token))
         }).unwrap();
 
-        let pin2 = pin.clone();
-        pin.spawn(rx.and_then(|rx| {
-            Data {
-                rx: rx.fuse(),
-                multi: m,
-                pin: pin2,
-                stack: Arc::new(Stack::new()),
-                state: RefCell::new(State {
-                    handles: Slab::with_capacity(128),
-                    sockets: Slab::with_capacity(128),
-                    timeout: None,
-                }),
-            }
-        }).map_err(|e| {
+        handle.clone().spawn(Data {
+            rx: rx.fuse(),
+            multi: m,
+            handle: handle,
+            stack: Arc::new(Stack::new()),
+            state: RefCell::new(State {
+                handles: Slab::with_capacity(128),
+                sockets: Slab::with_capacity(128),
+                timeout: None,
+            }),
+        }.map_err(|e| {
             panic!("error while processing http requests: {}", e)
         }));
 
@@ -186,11 +184,7 @@ impl Data {
         // here to pull out the actual timeout future.
         if let Some(dur) = dur {
             debug!("scheduling a new timeout in {:?}", dur);
-            let mut timeout = self.pin.handle().clone().timeout(dur);
-            let mut timeout = match timeout.poll() {
-                Ok(Async::Ready(timeout)) => timeout,
-                _ => panic!("event loop should finish poll immediately"),
-            };
+            let mut timeout = Timeout::new(dur, &self.handle).unwrap();
             drop(state);
             let res = timeout.poll().unwrap();
             state = self.state.borrow_mut();
@@ -227,20 +221,15 @@ impl Data {
 
         // If this is the first time we've seen the socket then we register a
         // new source with the event loop. Currently that's done through
-        // `ReadinessStream` which handles registration and deregistration of
+        // `PollEvented` which handles registration and deregistration of
         // interest on the event loop itself.
         //
-        // Like above with timeouts, the future returned from `ReadinessStream`
+        // Like above with timeouts, the future returned from `PollEvented`
         // should be immediately resolve-able because we're guaranteed to be on
         // the event loop.
         let index = if token == 0 {
             let source = MioSocket { inner: socket };
-            let mut ready = ReadinessStream::new(self.pin.handle().clone(),
-                                                 source);
-            let stream = match ready.poll().unwrap() {
-                Async::Ready(stream) => stream,
-                _ => panic!("event loop should finish poll immediately"),
-            };
+            let stream = PollEvented::new(source, &self.handle).unwrap();
             if !state.sockets.has_available() {
                 let len = state.sockets.len();
                 state.sockets.reserve_exact(len);
@@ -347,12 +336,12 @@ impl Data {
         let mut state = self.state.borrow_mut();
         let mut events = Events::new();
         let mut set = false;
-        if state.sockets[idx].stream.poll_read().unwrap().is_ready() {
+        if state.sockets[idx].stream.poll_read().is_ready() {
             debug!("\treadable");
             events.input(true);
             set = true;
         }
-        if state.sockets[idx].stream.poll_write().unwrap().is_ready() {
+        if state.sockets[idx].stream.poll_write().is_ready() {
             debug!("\twritable");
             events.output(true);
             set = true;

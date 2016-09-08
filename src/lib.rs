@@ -17,14 +17,14 @@
 //!
 //! use curl::easy::Easy;
 //! use futures::Future;
-//! use tokio_core::Loop;
+//! use tokio_core::reactor::Core;
 //! use tokio_curl::Session;
 //!
 //! fn main() {
 //!     // Create an event loop that we'll run on, as well as an HTTP `Session`
 //!     // which we'll be routing all requests through.
-//!     let mut lp = Loop::new().unwrap();
-//!     let session = Session::new(lp.pin());
+//!     let mut lp = Core::new().unwrap();
+//!     let session = Session::new(lp.handle());
 //!
 //!     // Prepare the HTTP request to be sent.
 //!     let mut req = Easy::new();
@@ -82,7 +82,7 @@ use std::io;
 
 use futures::{Future, Poll, Async};
 use curl::easy::Easy;
-use tokio_core::LoopPin;
+use tokio_core::reactor::Handle;
 
 /// A shared cache for HTTP requests to pool data such as TCP connections
 /// between.
@@ -127,8 +127,8 @@ impl Session {
     ///
     /// This function returns a future which will resolve to a `Session` once
     /// it's been initialized.
-    pub fn new(pin: LoopPin) -> Session {
-        Session { inner: imp::Session::new(pin) }
+    pub fn new(handle: Handle) -> Session {
+        Session { inner: imp::Session::new(handle) }
     }
 
     /// Execute and HTTP request asynchronously, returning a future representing
@@ -146,11 +146,6 @@ impl Session {
     ///
     /// Note that if the `Perform` future is dropped it will cancel the
     /// outstanding HTTP request, cleaning up all resources associated with it.
-    ///
-    /// Note that all callbacks associated with the `Easy` handle, for example
-    /// the read and write functions, will get executed on the event loop. As a
-    /// result you may want to close over `LoopData` in them if you'd like to
-    /// collect the results.
     pub fn perform(&self, handle: Easy) -> Perform {
         Perform { inner: self.inner.perform(handle) }
     }

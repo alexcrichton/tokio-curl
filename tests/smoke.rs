@@ -9,14 +9,14 @@ use std::time::Duration;
 
 use curl::easy::Easy;
 use futures::Future;
-use tokio_core::Loop;
+use tokio_core::reactor::{Core, Timeout};
 use tokio_curl::Session;
 
 #[test]
 fn download_rust_lang() {
-    let mut lp = Loop::new().unwrap();
+    let mut lp = Core::new().unwrap();
 
-    let session = Session::new(lp.pin());
+    let session = Session::new(lp.handle());
     let response = Arc::new(Mutex::new(Vec::new()));
     let headers = Arc::new(Mutex::new(Vec::new()));
 
@@ -47,9 +47,9 @@ fn download_rust_lang() {
 
 #[test]
 fn timeout_download_rust_lang() {
-    let mut lp = Loop::new().unwrap();
+    let mut lp = Core::new().unwrap();
 
-    let session = Session::new(lp.pin());
+    let session = Session::new(lp.handle());
 
     let mut req = Easy::new();
     req.get(true).unwrap();
@@ -57,7 +57,7 @@ fn timeout_download_rust_lang() {
     req.write_function(|data| Ok(data.len())).unwrap();
     let req = session.perform(req).map_err(|err| err.into_error());
 
-    let timeout = lp.handle().timeout(Duration::from_millis(5)).flatten();
+    let timeout = Timeout::new(Duration::from_millis(5), &lp.handle()).unwrap();
     let result = req.map(Ok).select(timeout.map(Err)).then(|res| {
         match res {
             Ok((Ok(_), _)) => {

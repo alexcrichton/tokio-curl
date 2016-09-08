@@ -16,7 +16,7 @@ use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle};
 use futures::{Future, Poll, oneshot, Oneshot, Complete, Async};
 use futures::task::{self, Unpark};
-use tokio_core::LoopPin;
+use tokio_core::reactor::Handle;
 use self::winapi::fd_set;
 
 #[derive(Clone)]
@@ -50,7 +50,7 @@ pub struct Perform {
 }
 
 impl Session {
-    pub fn new(_pin: LoopPin) -> Session {
+    pub fn new(_handle: Handle) -> Session {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let conn1 = TcpStream::connect(&addr).unwrap();
