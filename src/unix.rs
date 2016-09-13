@@ -48,7 +48,7 @@ struct State {
     sockets: Slab<SocketEntry>,
 
     // Last timeout requested by libcurl that we schedule.
-    timeout: Option<Timeout>,
+    timeout: TimeoutState,
 }
 
 struct HandleEntry {
@@ -60,6 +60,12 @@ struct SocketEntry {
     want: Option<SocketEvents>,
     changed: bool,
     stream: PollEvented<MioSocket>,
+}
+
+enum TimeoutState {
+    Waiting(Timeout),
+    Ready,
+    None,
 }
 
 scoped_thread_local!(static DATA: Data);
@@ -90,7 +96,7 @@ impl Session {
             state: RefCell::new(State {
                 handles: Slab::with_capacity(128),
                 sockets: Slab::with_capacity(128),
-                timeout: None,
+                timeout: TimeoutState::None,
             }),
         }.map_err(|e| {
             panic!("error while processing http requests: {}", e)
@@ -175,7 +181,7 @@ impl Data {
     fn schedule_timeout(&self, dur: Option<Duration>) -> bool {
         // First up, always clear the existing timeout
         let mut state = self.state.borrow_mut();
-        state.timeout = None;
+        state.timeout = TimeoutState::None;
 
         // If a timeout was requested, then we configure one. Note that we know
         // for sure that we're executing on the event loop because `Data` is
@@ -184,13 +190,19 @@ impl Data {
         // here to pull out the actual timeout future.
         if let Some(dur) = dur {
             debug!("scheduling a new timeout in {:?}", dur);
-            let mut timeout = Timeout::new(dur, &self.handle).unwrap();
-            drop(state);
-            let res = timeout.poll().unwrap();
-            state = self.state.borrow_mut();
-            match res {
-                Async::NotReady => state.timeout = Some(timeout),
-                Async::Ready(()) => panic!("timeout done immediately?"),
+            if dur == Duration::new(0, 0) {
+                state.timeout = TimeoutState::Ready;
+            } else {
+                let mut timeout = Timeout::new(dur, &self.handle).unwrap();
+                drop(state);
+                let res = timeout.poll().unwrap();
+                state = self.state.borrow_mut();
+                match res {
+                    Async::NotReady => {
+                        state.timeout = TimeoutState::Waiting(timeout);
+                    }
+                    Async::Ready(()) => panic!("timeout done immediately?"),
+                }
             }
         }
 
@@ -395,17 +407,19 @@ impl Data {
     }
 
     fn check_timeout(&self) {
-        let mut timeout = false;
-        if let Some(ref mut t) = self.state.borrow_mut().timeout {
-            if let Ok(Async::Ready(())) = t.poll() {
-                timeout = true;
+        match self.state.borrow_mut().timeout {
+            TimeoutState::Waiting(ref mut t) => {
+                match t.poll() {
+                    Ok(Async::Ready(())) => {}
+                    _ => return,
+                }
             }
+            TimeoutState::Ready => {}
+            TimeoutState::None => return
         }
-        if timeout {
-            debug!("timeout fired");
-            self.state.borrow_mut().timeout = None;
-            self.multi.timeout().expect("timeout error");
-        }
+        debug!("timeout fired");
+        self.state.borrow_mut().timeout = TimeoutState::None;
+        self.multi.timeout().expect("timeout error");
     }
 
     fn check_completions(&self) {
