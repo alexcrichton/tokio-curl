@@ -407,19 +407,23 @@ impl Data {
     }
 
     fn check_timeout(&self) {
-        match self.state.borrow_mut().timeout {
-            TimeoutState::Waiting(ref mut t) => {
-                match t.poll() {
-                    Ok(Async::Ready(())) => {}
-                    _ => return,
+        // Sometimes telling libcurl that we timed out causes it to request
+        // again that we should time out, so execute this in a loop.
+        loop {
+            match self.state.borrow_mut().timeout {
+                TimeoutState::Waiting(ref mut t) => {
+                    match t.poll() {
+                        Ok(Async::Ready(())) => {}
+                        _ => return,
+                    }
                 }
+                TimeoutState::Ready => {}
+                TimeoutState::None => return
             }
-            TimeoutState::Ready => {}
-            TimeoutState::None => return
+            debug!("timeout fired");
+            self.state.borrow_mut().timeout = TimeoutState::None;
+            self.multi.timeout().expect("timeout error");
         }
-        debug!("timeout fired");
-        self.state.borrow_mut().timeout = TimeoutState::None;
-        self.multi.timeout().expect("timeout error");
     }
 
     fn check_completions(&self) {
