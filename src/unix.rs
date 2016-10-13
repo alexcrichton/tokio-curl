@@ -201,7 +201,7 @@ impl Data {
                     Async::NotReady => {
                         state.timeout = TimeoutState::Waiting(timeout);
                     }
-                    Async::Ready(()) => panic!("timeout done immediately?"),
+                    Async::Ready(()) => state.timeout = TimeoutState::Ready,
                 }
             }
         }
