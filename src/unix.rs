@@ -348,6 +348,12 @@ impl Data {
         let mut state = self.state.borrow_mut();
         let mut events = Events::new();
         let mut set = false;
+
+        // If this socket has gone away ignore this notification
+        if state.sockets.get(idx).is_none() {
+            return
+        }
+
         if state.sockets[idx].stream.poll_read().is_ready() {
             debug!("\treadable");
             events.input(true);
