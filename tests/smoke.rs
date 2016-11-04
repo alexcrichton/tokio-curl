@@ -70,3 +70,20 @@ fn timeout_download_rust_lang() {
 
     lp.run(result).unwrap();
 }
+
+#[test]
+fn download_then_download() {
+    let mut lp = Core::new().unwrap();
+
+    let session = Session::new(lp.handle());
+
+    let mut req = Easy::new();
+    req.get(true).unwrap();
+    req.url("https://www.rust-lang.org").unwrap();
+    req.write_function(|data| Ok(data.len())).unwrap();
+    let test = session.perform(req).and_then(|req| {
+        session.perform(req)
+    });
+
+    lp.run(test).unwrap();
+}

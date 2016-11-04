@@ -227,7 +227,9 @@ impl Data {
         if events.remove() {
             assert!(token > 0);
             debug!("remove socket: {} / {}", socket, token - 1);
-            state.sockets.remove(token - 1).unwrap();
+            state.sockets.remove(token - 1).unwrap()
+                 .stream.deregister(&self.handle)
+                 .expect("failed to deregister");
             return
         }
 
