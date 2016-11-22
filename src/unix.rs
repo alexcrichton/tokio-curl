@@ -12,9 +12,9 @@ use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle, Socket, SocketEvents, Events};
 use futures::{self, Future, Poll, Oneshot, Complete, Async};
 use futures::task::{self, EventSet, UnparkEvent};
+use futures::sync::mpsc::{unbounded, UnboundedSender, UnboundedReceiver};
 use futures::stream::{Stream, Fuse};
 use tokio_core::reactor::{Timeout, Handle, PollEvented};
-use tokio_core::channel::{channel, Sender, Receiver};
 use self::mio::unix::EventedFd;
 use self::slab::Slab;
 
@@ -22,7 +22,8 @@ use stack::Stack;
 
 #[derive(Clone)]
 pub struct Session {
-    tx: Sender<Message>,
+    // TODO: in next major version remove this `RefCell`.
+    tx: RefCell<UnboundedSender<Message>>,
 }
 
 enum Message {
@@ -33,7 +34,7 @@ struct Data {
     multi: Multi,
     state: RefCell<State>,
     handle: Handle,
-    rx: Fuse<Receiver<Message>>,
+    rx: Fuse<UnboundedReceiver<Message>>,
     stack: Arc<Stack<usize>>,
 }
 
@@ -78,7 +79,7 @@ impl Session {
     pub fn new(handle: Handle) -> Session {
         let mut m = Multi::new();
 
-        let (tx, rx) = channel(&handle).unwrap();
+        let (tx, rx) = unbounded();
 
         m.timer_function(move |dur| {
             DATA.with(|d| d.schedule_timeout(dur))
@@ -102,12 +103,14 @@ impl Session {
             panic!("error while processing http requests: {}", e)
         }));
 
-        Session { tx: tx }
+        Session { tx: RefCell::new(tx) }
     }
 
     pub fn perform(&self, handle: Easy) -> Perform {
         let (tx, rx) = futures::oneshot();
-        self.tx.send(Message::Execute(handle, tx))
+        self.tx
+            .borrow_mut()
+            .send(Message::Execute(handle, tx))
             .expect("driver task has gone away");
         Perform { inner: rx }
     }
@@ -278,7 +281,7 @@ impl Data {
 
     fn check_messages(&mut self) -> io::Result<()> {
         loop {
-            let msg = match try!(self.rx.poll()) {
+            let msg = match self.rx.poll().expect("cannot fail") {
                 Async::Ready(Some(msg)) => msg,
                 Async::Ready(None) => break,
                 Async::NotReady => break,
