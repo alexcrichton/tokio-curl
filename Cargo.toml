@@ -12,7 +12,7 @@ libcurl.
 """
 
 [dependencies]
-curl = "0.3.6"
+curl = "0.4.1"
 futures = "0.1.6"
 tokio-core = "0.1.1"
 log = "0.3"
