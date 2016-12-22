@@ -6,7 +6,7 @@ use std::mem;
 use std::net::{TcpStream, TcpListener};
 use std::os::windows::prelude::*;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -19,9 +19,9 @@ use futures::task::{self, Unpark};
 use tokio_core::reactor::Handle;
 use self::winapi::fd_set;
 
-#[derive(Clone)]
 pub struct Session {
     tx: Sender<Message>,
+    cnt: Arc<AtomicUsize>,
 }
 
 enum Message {
@@ -73,7 +73,10 @@ impl Session {
             run(tx2, rx);
         });
 
-        Session { tx: tx }
+        Session {
+            tx: tx,
+            cnt: Arc::new(AtomicUsize::new(1)),
+        }
     }
 
     pub fn perform(&self, handle: Easy) -> Perform {
@@ -83,9 +86,21 @@ impl Session {
     }
 }
 
+impl Clone for Session {
+    fn clone(&self) -> Session {
+        self.cnt.fetch_add(1, Ordering::SeqCst);
+        Session {
+            tx: self.tx.clone(),
+            cnt: self.cnt.clone(),
+        }
+    }
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
-        self.tx.send(Message::Done);
+        if self.cnt.fetch_sub(1, Ordering::SeqCst) == 0 {
+            self.tx.send(Message::Done);
+        }
     }
 }
 
@@ -201,7 +216,6 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
                 Message::Done => {
                     debug!("done");
                     *done = true;
-                    continue
                 }
                 Message::Run(easy, complete) => {
                     trace!("starting a new request");

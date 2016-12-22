@@ -87,3 +87,25 @@ fn download_then_download() {
 
     lp.run(test).unwrap();
 }
+
+#[test]
+fn drop_a_clone() {
+    let mut lp = Core::new().unwrap();
+    let session = Session::new(lp.handle());
+    let mut req = Easy::new();
+    req.custom_request("GET").unwrap();
+    req.url("https://www.rust-lang.org").unwrap();
+    let res = session.perform(req)
+        .then(|_resp| {
+            let mut req2 = Easy::new();
+            req2.custom_request("GET").unwrap();
+            req2.url("https://www.rust-lang.org").unwrap();
+            let new_session = session.clone();
+            new_session.perform(req2)
+        })
+        .map(|mut resp2| {
+            let status_code = resp2.response_code().unwrap_or(0);
+            status_code
+        });
+    lp.run(res).unwrap();
+}
