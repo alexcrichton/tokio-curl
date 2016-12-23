@@ -271,11 +271,13 @@ impl Data {
         state.want = Some(events);
         state.changed = true;
 
+        // Update the needs of our socket registered with the event loop as
+        // whether we want read/write may have changed.
+        //
         // TODO: this pushes a duplicate unpark event if we're already inside of
         //       another unpark event.
         task::with_unpark_event(event, || {
-            state.stream.need_read();
-            state.stream.need_write();
+            state.update_needs();
         });
     }
 
@@ -356,6 +358,7 @@ impl Data {
 
         // If this socket has gone away ignore this notification
         if state.sockets.get(idx).is_none() {
+            debug!("socket is gone");
             return
         }
 
@@ -384,37 +387,14 @@ impl Data {
             Some(state) => state,
             None => return,
         };
-        if state.changed {
-            return
-        }
-        let want = match state.want {
-            Some(ref want) => want,
-            None => return,
-        };
 
-        let mut fd = libc::pollfd {
-            fd: socket,
-            events: 0,
-            revents: 0,
-        };
-        if want.input() {
-            fd.events |= libc::POLLIN;
+        // If the state didn't change in what it needed, check again to see
+        // what activity is on the socket and test whether we need to either
+        // block for a read/write or unpark ourselves as we're still able to
+        // make progress.
+        if !state.changed {
+            state.update_needs();
         }
-        if want.output() {
-            fd.events |= libc::POLLOUT;
-        }
-        unsafe {
-            libc::poll(&mut fd, 1, 0);
-        }
-        if want.input() && (fd.revents & libc::POLLIN) == 0 {
-            state.stream.need_read();
-            return
-        }
-        if want.output() && (fd.revents & libc::POLLOUT) == 0 {
-            state.stream.need_write();
-            return
-        }
-        task::park().unpark();
     }
 
     fn check_timeout(&self) {
@@ -425,7 +405,10 @@ impl Data {
                 TimeoutState::Waiting(ref mut t) => {
                     match t.poll() {
                         Ok(Async::Ready(())) => {}
-                        _ => return,
+                        _ => {
+                            debug!("timeout not ready");
+                            return
+                        }
                     }
                 }
                 TimeoutState::Ready => {}
@@ -457,6 +440,77 @@ impl Data {
                                 .map_err(|e| e.into());
             entry.complete.complete(res);
         });
+    }
+}
+
+impl SocketEntry {
+    /// Depending on `self.want`, the events that this socket is interested in,
+    /// update the registration with the event loop to schedule a wakeup for
+    /// ourselves at an appropriate time.
+    ///
+    /// Currently libcurl expects us to notify it with "level" semantics. That
+    /// is, so long as the socket is readable/writable we need to be calling
+    /// `Multi::action`. Currently tokio-core, however, only notifies us with
+    /// "edge" semantics, meaning that we only get a notification when a socket
+    /// *changes* state to readable/writable.
+    ///
+    /// The purpose of this function is to emulate level semantics with edge
+    /// semantics that we have. This function will call `poll` in a nonblocking
+    /// fashion to learn whether a socket is readable/writable under the hood.
+    /// This way we know that if libcurl wants a socket to be readable and the
+    /// socket is actually still readable, we'll schedule a notification for us
+    /// to call `Multi::action` "soon".
+    ///
+    /// Unfortunately this is probably not the most efficient as we'll be
+    /// calling `poll` a lot, but hopefully it's not too onerous to check such
+    /// information and in the grand scheme of things hopefully doesn't slow
+    /// down the http transfer too much.
+    fn update_needs(&mut self) {
+        let want = match self.want {
+            Some(ref want) => want,
+            None => return,
+        };
+
+        let mut fd = libc::pollfd {
+            fd: self.stream.get_ref().inner,
+            events: 0,
+            revents: 0,
+        };
+        if want.input() {
+            fd.events |= libc::POLLIN;
+        }
+        if want.output() {
+            fd.events |= libc::POLLOUT;
+        }
+        unsafe {
+            libc::poll(&mut fd, 1, 0);
+        }
+
+        // In these two blocks below, we test what libcurl expects (`want`)
+        // with what the socket actually looks like (`fd.revents`).
+        //
+        // If, for example, we want input (readable) and the socket is not
+        // readable then we inform the event loop of such. If we want input and
+        // we're still readable, then we use a "yield" operation to arrange for
+        // ourselves to get polled in the near future with `park().unpark()`.
+        // This should allow lots of transfers to make progress without
+        // starving anything unnecessarily.
+        if want.input() {
+            if (fd.revents & libc::POLLIN) == 0 {
+                self.stream.need_read();
+            } else {
+                task::park().unpark();
+            }
+        }
+        if want.output() {
+            if (fd.revents & libc::POLLOUT) == 0 {
+                self.stream.need_write();
+            } else {
+                // TODO: don't need to `unpark` here a second time if we
+                // already did so above.
+                task::park().unpark();
+            }
+        }
     }
 }
 
