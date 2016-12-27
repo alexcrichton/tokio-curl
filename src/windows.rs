@@ -98,7 +98,7 @@ impl Clone for Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if self.cnt.fetch_sub(1, Ordering::SeqCst) == 0 {
+        if self.cnt.fetch_sub(1, Ordering::SeqCst) == 1 {
             self.tx.send(Message::Done);
         }
     }
