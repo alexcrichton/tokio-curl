@@ -5,7 +5,7 @@ authors = ["Alex Crichton <alex@alexcrichton.com>"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/tokio-rs/tokio-curl"
 homepage = "https://github.com/tokio-rs/tokio-curl"
-documentation = "https://tokio-rs.github.io/tokio-curl"
+documentation = "https://docs.rs"
 description = """
 An implementation of an asynchronous HTTP client using futures backed by
 libcurl.
