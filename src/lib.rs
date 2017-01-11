@@ -52,6 +52,7 @@
 //! well on Windows. Unfortunately the implementation (seemingly from libcurl)
 //! relies on `select`, which does not scale very far on Windows.
 
+#![doc(html_root_url = "https://docs.rs/tokio-curl/0.1")]
 #![deny(missing_docs)]
 
 // TODO: handle level a bit better by turning the event loop every so often
