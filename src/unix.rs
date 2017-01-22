@@ -227,6 +227,14 @@ impl Data {
         let mut state = self.state.borrow_mut();
 
         // First up, if libcurl wants us to forget about this socket, we do so!
+        //
+        // Note that we explicitly do not deregister the socket provided with
+        // the event loop. We don't know whether `socket` is actually open or
+        // may have been closed already, so we run the risk of deregistering
+        // another socket if we actually call deregister.
+        //
+        // As a result we just remove all tracking information about the token
+        // provided and otherwise ignore the socket for now.
         if events.remove() {
             assert!(token > 0);
             debug!("remove socket: {} / {}", socket, token - 1);
@@ -522,7 +530,19 @@ impl mio::Evented for MioSocket {
                 token: mio::Token,
                 interest: mio::Ready,
                 opts: mio::PollOpt) -> io::Result<()> {
-        EventedFd(&self.inner).register(poll, token, interest, opts)
+        // Curl will periodically ask us to become interested in a socket that
+        // we were previously interested in (but then previously became
+        // uninterested in as well). When we're removing a socket from curl we
+        // can't actually call `deregister` (see comment above) so the sockets
+        // we're registering here may or may not be registered with the event
+        // loop.
+        match EventedFd(&self.inner).register(poll, token, interest, opts) {
+            Ok(()) => Ok(()),
+            Err(ref e) if e.raw_os_error() == Some(libc::EEXIST) => {
+                self.reregister(poll, token, interest, opts)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn reregister(&self,
