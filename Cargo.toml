@@ -10,6 +10,7 @@ description = """
 An implementation of an asynchronous HTTP client using futures backed by
 libcurl.
 """
+categories = ["asynchronous", "web-programming::http-client"]
 
 [dependencies]
 curl = "0.4.1"
