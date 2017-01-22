@@ -12,6 +12,10 @@ libcurl.
 """
 categories = ["asynchronous", "web-programming::http-client"]
 
+[badges]
+travis-ci = { repository = "tokio-rs/tokio-curl" }
+appveyor = { repository = "alexcrichton/tokio-curl" }
+
 [dependencies]
 curl = "0.4.1"
 futures = "0.1.6"
