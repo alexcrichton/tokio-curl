@@ -536,6 +536,11 @@ impl mio::Evented for MioSocket {
         // can't actually call `deregister` (see comment above) so the sockets
         // we're registering here may or may not be registered with the event
         // loop.
+        //
+        // To handle this if we get `EEXIST` we just map this call to a call to
+        // `reregister`. That way we don't have to worry if we've already
+        // registered the file descriptor with the event loop but we can still
+        // match the parameters provided here.
         match EventedFd(&self.inner).register(poll, token, interest, opts) {
             Ok(()) => Ok(()),
             Err(ref e) if e.raw_os_error() == Some(libc::EEXIST) => {
