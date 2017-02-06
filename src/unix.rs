@@ -82,10 +82,16 @@ impl Session {
         let (tx, rx) = unbounded();
 
         m.timer_function(move |dur| {
+            if !DATA.is_set() {
+                return true
+            }
             DATA.with(|d| d.schedule_timeout(dur))
         }).unwrap();
 
         m.socket_function(move |socket, events, token| {
+            if !DATA.is_set() {
+                return
+            }
             DATA.with(|d| d.schedule_socket(socket, events, token))
         }).unwrap();
 
