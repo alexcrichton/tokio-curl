@@ -10,9 +10,10 @@ use std::time::Duration;
 use curl::{self, Error};
 use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle, Socket, SocketEvents, Events};
-use futures::{self, Future, Poll, Oneshot, Complete, Async};
+use futures::{Future, Poll, Async};
 use futures::task::{self, EventSet, UnparkEvent};
 use futures::sync::mpsc::{unbounded, UnboundedSender, UnboundedReceiver};
+use futures::sync::oneshot;
 use futures::stream::{Stream, Fuse};
 use tokio_core::reactor::{Timeout, Handle, PollEvented};
 use self::mio::unix::EventedFd;
@@ -27,7 +28,7 @@ pub struct Session {
 }
 
 enum Message {
-    Execute(Easy, Complete<io::Result<(Easy, Option<Error>)>>),
+    Execute(Easy, oneshot::Sender<io::Result<(Easy, Option<Error>)>>),
 }
 
 struct Data {
@@ -53,7 +54,7 @@ struct State {
 }
 
 struct HandleEntry {
-    complete: Complete<io::Result<(Easy, Option<Error>)>>,
+    complete: oneshot::Sender<io::Result<(Easy, Option<Error>)>>,
     handle: EasyHandle,
 }
 
@@ -72,7 +73,7 @@ enum TimeoutState {
 scoped_thread_local!(static DATA: Data);
 
 pub struct Perform {
-    inner: Oneshot<io::Result<(Easy, Option<Error>)>>,
+    inner: oneshot::Receiver<io::Result<(Easy, Option<Error>)>>,
 }
 
 impl Session {
@@ -113,7 +114,7 @@ impl Session {
     }
 
     pub fn perform(&self, handle: Easy) -> Perform {
-        let (tx, rx) = futures::oneshot();
+        let (tx, rx) = oneshot::channel();
         self.tx
             .borrow_mut()
             .send(Message::Execute(handle, tx))
@@ -311,7 +312,7 @@ impl Data {
             let mut handle = match DATA.set(self, || self.multi.add(easy)) {
                 Ok(handle) => handle,
                 Err(e) => {
-                    tx.complete(Err(e.into()));
+                    drop(tx.send(Err(e.into())));
                     continue
                 }
             };
@@ -450,7 +451,7 @@ impl Data {
             let remove_err = self.multi.remove(entry.handle);
             let res = remove_err.map(|e| (e, transfer_err.err()))
                                 .map_err(|e| e.into());
-            entry.complete.complete(res);
+            drop(entry.complete.send(res));
         });
     }
 }

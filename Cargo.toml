@@ -18,13 +18,23 @@ appveyor = { repository = "alexcrichton/tokio-curl" }
 
 [dependencies]
 curl = "0.4.1"
-futures = "0.1.6"
-tokio-core = "0.1.1"
+#futures = "0.1.6"
 log = "0.3"
+#tokio-io = { git = "https://github.com/alexcrichton/tokio-io", default-features = false }
+
+[dependencies.tokio-core]
+git = "https://github.com/alexcrichton/tokio-core"
+default-features = false
+branch = "tio"
+
+[dependencies.futures]
+git = "https://github.com/alexcrichton/futures-rs"
+branch = "close"
+default-features = false
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-mio = "0.6"
+mio = { git = "https://github.com/carllerche/mio", branch = "iovec-crate" }
 slab = "0.3"
 scoped-tls = "0.1"
 
@@ -34,3 +44,7 @@ ws2_32-sys = "0.2"
 
 [dev-dependencies]
 env_logger = { version = "0.3", default-features = false }
+
+[features]
+default = ["use_std"]
+use_std = ["futures/use_std"]

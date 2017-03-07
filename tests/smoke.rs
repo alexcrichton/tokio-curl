@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use curl::easy::Easy;
-use futures::Future;
+use futures::future::{self, Future};
 use tokio_core::reactor::{Core, Timeout};
 use tokio_curl::Session;
 
@@ -63,7 +63,7 @@ fn timeout_download_rust_lang() {
             Ok((Ok(_), _)) => {
                 panic!("should have timed out");
             }
-            Ok((Err(()), _)) => futures::finished::<(), ()>(()),
+            Ok((Err(()), _)) => future::ok::<(), ()>(()),
             Err((e, _)) => panic!("I/O error: {}", e),
         }
     });

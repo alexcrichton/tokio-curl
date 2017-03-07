@@ -14,8 +14,9 @@ use std::time::Duration;
 use curl::Error;
 use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle};
-use futures::{Future, Poll, oneshot, Oneshot, Complete, Async};
-use futures::task::{self, Unpark};
+use futures::{Future, Poll, Async};
+use futures::sync::oneshot;
+use futures::executor::{self, Unpark};
 use tokio_core::reactor::Handle;
 use self::winapi::fd_set;
 
@@ -25,7 +26,7 @@ pub struct Session {
 }
 
 enum Message {
-    Run(Easy, Complete<io::Result<(Easy, Option<Error>)>>),
+    Run(Easy, oneshot::Sender<io::Result<(Easy, Option<Error>)>>),
     Done,
 }
 
@@ -46,7 +47,7 @@ struct Channel {
 }
 
 pub struct Perform {
-    inner: Oneshot<io::Result<(Easy, Option<Error>)>>,
+    inner: oneshot::Receiver<io::Result<(Easy, Option<Error>)>>,
 }
 
 impl Session {
@@ -80,7 +81,7 @@ impl Session {
     }
 
     pub fn perform(&self, handle: Easy) -> Perform {
-        let (tx, rx) = oneshot();
+        let (tx, rx) = oneshot::channel();
         self.tx.send(Message::Run(handle, tx));
         Perform { inner: rx }
     }
@@ -145,12 +146,12 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
                 Err(e) => Err(e.into()),
             };
             trace!("finishing a request");
-            complete.complete(res);
+            drop(complete.send(res));
         });
 
         to_remove.truncate(0);
         for (i, &mut (_, ref mut complete)) in active.iter_mut().enumerate() {
-            let mut t = task::spawn(CheckCancel { inner: complete });
+            let mut t = executor::spawn(CheckCancel { inner: complete });
             if let Ok(Async::Ready(())) = t.poll_future(unpark.clone()) {
                 to_remove.push(i);
             }
@@ -204,7 +205,7 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
     fn enqueue(rx: &Receiver<Message>,
                multi: &Multi,
                active: &mut Vec<(EasyHandle,
-                                 Complete<io::Result<(Easy, Option<Error>)>>)>,
+                                 oneshot::Sender<io::Result<(Easy, Option<Error>)>>)>,
                done: &mut bool) {
         if !rx.drain() {
             trace!("no messages available");
@@ -221,7 +222,7 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
                     trace!("starting a new request");
                     match multi.add(easy) {
                         Ok(handle) => active.push((handle, complete)),
-                        Err(e) => complete.complete(Err(e.into())),
+                        Err(e) => drop(complete.send(Err(e.into()))),
                     }
                 }
             }
@@ -285,7 +286,7 @@ impl<T> Receiver<T> {
 }
 
 struct CheckCancel<'a, T: 'a> {
-    inner: &'a mut Complete<T>,
+    inner: &'a mut oneshot::Sender<T>,
 }
 
 impl<'a, T> Future for CheckCancel<'a, T> {
