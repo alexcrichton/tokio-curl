@@ -18,13 +18,14 @@ appveyor = { repository = "alexcrichton/tokio-curl" }
 
 [dependencies]
 curl = "0.4.1"
-futures = "0.1.6"
-tokio-core = "0.1.1"
+futures = "0.1.11"
 log = "0.3"
+tokio-io = "0.1"
+tokio-core = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-mio = "0.6"
+mio = "0.6.5"
 slab = "0.3"
 scoped-tls = "0.1"
 
