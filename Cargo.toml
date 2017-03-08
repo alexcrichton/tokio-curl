@@ -34,7 +34,7 @@ default-features = false
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-mio = { git = "https://github.com/carllerche/mio", branch = "iovec-crate" }
+mio = { git = "https://github.com/carllerche/mio" }
 slab = "0.3"
 scoped-tls = "0.1"
 
