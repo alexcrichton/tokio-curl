@@ -35,3 +35,6 @@ ws2_32-sys = "0.2"
 
 [dev-dependencies]
 env_logger = { version = "0.3", default-features = false }
+
+[replace]
+'futures:0.1.14' = { git = 'https://github.com/alexcrichton/futures-rs' }

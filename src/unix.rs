@@ -11,7 +11,8 @@ use curl::{self, Error};
 use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle, Socket, SocketEvents, Events};
 use futures::{Future, Poll, Async};
-use futures::task::{self, EventSet, UnparkEvent};
+use futures::executor::{self, Notify};
+use futures::task;
 use futures::sync::mpsc::{unbounded, UnboundedSender, UnboundedReceiver};
 use futures::sync::oneshot;
 use futures::stream::{Stream, Fuse};
@@ -20,6 +21,7 @@ use self::mio::unix::EventedFd;
 use self::slab::Slab;
 
 use stack::Stack;
+use atomic_task::AtomicTask;
 
 #[derive(Clone)]
 pub struct Session {
@@ -36,7 +38,7 @@ struct Data {
     state: RefCell<State>,
     handle: Handle,
     rx: Fuse<UnboundedReceiver<Message>>,
-    stack: Arc<Stack<usize>>,
+    notify: Arc<MyNotify>,
 }
 
 struct State {
@@ -100,7 +102,10 @@ impl Session {
             rx: rx.fuse(),
             multi: m,
             handle: handle,
-            stack: Arc::new(Stack::new()),
+            notify: Arc::new(MyNotify {
+                stack: Stack::new(),
+                task: AtomicTask::new(),
+            }),
             state: RefCell::new(State {
                 handles: Slab::with_capacity(128),
                 sockets: Slab::with_capacity(128),
@@ -148,6 +153,8 @@ impl Future for Data {
         try!(self.check_messages());
 
         DATA.set(self, || {
+            unsafe { self.notify.task.park(); }
+
             // Process events for each handle which have happened since we were
             // last here.
             //
@@ -156,9 +163,8 @@ impl Future for Data {
             // our `stack` where events were pushed onto. The
             // `with_unpark_event` method ensures that any notifications sent to
             // a task will also inform us why they're being notified.
-            for idx in self.stack.drain() {
-                let event = UnparkEvent::new(self.stack.clone(), idx);
-                task::with_unpark_event(event, || {
+            for idx in self.notify.stack.drain() {
+                executor::with_notify(&self.notify, idx, || {
                     self.check(idx);
                 });
             }
@@ -279,7 +285,6 @@ impl Data {
             token - 1
         };
 
-        let event = UnparkEvent::new(self.stack.clone(), 2 * index + 1);
         let state = &mut state.sockets[index];
         state.want = Some(events);
         state.changed = true;
@@ -289,7 +294,7 @@ impl Data {
         //
         // TODO: this pushes a duplicate unpark event if we're already inside of
         //       another unpark event.
-        task::with_unpark_event(event, || {
+        executor::with_notify(&self.notify, 2 * index + 1, || {
             state.update_needs();
         });
     }
@@ -334,7 +339,7 @@ impl Data {
 
             // Enqueue a request to poll the state of the `complete` half so we
             // can get a notification when it goes away.
-            self.stack.push(2 * index);
+            self.notify.stack.push(2 * index);
         }
 
         Ok(())
@@ -512,7 +517,7 @@ impl SocketEntry {
             if (fd.revents & libc::POLLIN) == 0 {
                 self.stream.need_read();
             } else {
-                task::park().unpark();
+                task::current().notify();
             }
         }
         if want.output() {
@@ -521,7 +526,7 @@ impl SocketEntry {
             } else {
                 // TODO: don't need to `unpark` here a second time if we
                 // already did so above.
-                task::park().unpark();
+                task::current().notify();
             }
         }
     }
@@ -570,8 +575,14 @@ impl mio::Evented for MioSocket {
     }
 }
 
-impl EventSet for Stack<usize> {
-    fn insert(&self, id: usize) {
-        self.push(id);
+struct MyNotify {
+    task: AtomicTask,
+    stack: Stack<usize>,
+}
+
+impl Notify for MyNotify {
+    fn notify(&self, id: usize) {
+        self.stack.push(id);
+        self.task.notify();
     }
 }

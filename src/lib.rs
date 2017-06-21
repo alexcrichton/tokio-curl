@@ -75,6 +75,7 @@ mod imp;
 mod imp;
 
 mod stack;
+mod atomic_task;
 
 use std::error;
 use std::fmt;
