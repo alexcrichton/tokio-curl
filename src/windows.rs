@@ -16,7 +16,7 @@ use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle};
 use futures::{Future, Poll, Async};
 use futures::sync::oneshot;
-use futures::executor::{self, Unpark};
+use futures::executor::{self, Notify};
 use tokio_core::reactor::Handle;
 use self::winapi::fd_set;
 
@@ -123,7 +123,7 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
     let mut active = Vec::new();
     let mut rx_done = false;
     let mut to_remove = Vec::new();
-    let unpark = Arc::new(MyUnpark { inner: tx.inner });
+    let notify = Arc::new(MyNotify { inner: tx.inner });
 
     loop {
         trace!("turn of the loop");
@@ -152,7 +152,7 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
         to_remove.truncate(0);
         for (i, &mut (_, ref mut complete)) in active.iter_mut().enumerate() {
             let mut t = executor::spawn(CheckCancel { inner: complete });
-            if let Ok(Async::Ready(())) = t.poll_future(unpark.clone()) {
+            if let Ok(Async::Ready(())) = t.poll_future_notify(&notify, 0) {
                 to_remove.push(i);
             }
         }
@@ -237,12 +237,12 @@ impl<T> Sender<T> {
     }
 }
 
-struct MyUnpark {
+struct MyNotify {
     inner: Arc<Channel>,
 }
 
-impl Unpark for MyUnpark {
-    fn unpark(&self) {
+impl Notify for MyNotify {
+    fn notify(&self, _id: usize) {
         self.inner.notify()
     }
 }
