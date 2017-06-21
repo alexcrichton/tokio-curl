@@ -59,7 +59,6 @@
 
 #[macro_use]
 extern crate log;
-#[macro_use]
 extern crate futures;
 extern crate tokio_core;
 extern crate curl;
