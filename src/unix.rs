@@ -122,7 +122,7 @@ impl Session {
         let (tx, rx) = oneshot::channel();
         self.tx
             .borrow_mut()
-            .send(Message::Execute(handle, tx))
+            .unbounded_send(Message::Execute(handle, tx))
             .expect("driver task has gone away");
         Perform { inner: rx }
     }

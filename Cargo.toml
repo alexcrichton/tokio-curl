@@ -18,7 +18,7 @@ appveyor = { repository = "alexcrichton/tokio-curl" }
 
 [dependencies]
 curl = "0.4.1"
-futures = "0.1.14"
+futures = "0.1.15"
 log = "0.3"
 tokio-io = "0.1"
 tokio-core = "0.1"
@@ -35,6 +35,3 @@ ws2_32-sys = "0.2"
 
 [dev-dependencies]
 env_logger = { version = "0.3", default-features = false }
-
-[replace]
-'futures:0.1.14' = { git = 'https://github.com/alexcrichton/futures-rs' }
