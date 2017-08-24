@@ -12,7 +12,7 @@ use curl::easy::Easy;
 use curl::multi::{Multi, EasyHandle, Socket, SocketEvents, Events};
 use futures::{Future, Poll, Async};
 use futures::executor::{self, Notify};
-use futures::task;
+use futures::task::{self, AtomicTask};
 use futures::sync::mpsc::{unbounded, UnboundedSender, UnboundedReceiver};
 use futures::sync::oneshot;
 use futures::stream::{Stream, Fuse};
@@ -21,7 +21,6 @@ use self::mio::unix::EventedFd;
 use self::slab::Slab;
 
 use stack::Stack;
-use atomic_task::AtomicTask;
 
 #[derive(Clone)]
 pub struct Session {
@@ -153,7 +152,7 @@ impl Future for Data {
         try!(self.check_messages());
 
         DATA.set(self, || {
-            unsafe { self.notify.task.park(); }
+            self.notify.task.register();
 
             // Process events for each handle which have happened since we were
             // last here.
