@@ -14,6 +14,7 @@ use tokio_curl::Session;
 
 #[test]
 fn download_rust_lang() {
+    drop(env_logger::init());
     let mut lp = Core::new().unwrap();
 
     let session = Session::new(lp.handle());
@@ -47,6 +48,7 @@ fn download_rust_lang() {
 
 #[test]
 fn timeout_download_rust_lang() {
+    drop(env_logger::init());
     let mut lp = Core::new().unwrap();
 
     let session = Session::new(lp.handle());
@@ -73,6 +75,7 @@ fn timeout_download_rust_lang() {
 
 #[test]
 fn download_then_download() {
+    drop(env_logger::init());
     let mut lp = Core::new().unwrap();
 
     let session = Session::new(lp.handle());
@@ -90,6 +93,7 @@ fn download_then_download() {
 
 #[test]
 fn drop_a_clone() {
+    drop(env_logger::init());
     let mut lp = Core::new().unwrap();
     let session = Session::new(lp.handle());
     let mut req = Easy::new();
