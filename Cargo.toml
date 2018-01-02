@@ -26,7 +26,7 @@ tokio-core = "0.1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 mio = "0.6.5"
-slab = "0.3"
+slab = "0.4"
 scoped-tls = "0.1"
 
 [target.'cfg(windows)'.dependencies]
