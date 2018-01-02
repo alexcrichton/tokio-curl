@@ -250,7 +250,7 @@ impl Data {
         if events.remove() {
             assert!(token > 0);
             debug!("remove socket: {} / {}", socket, token - 1);
-            state.sockets.remove(token - 1).unwrap();
+            state.sockets.remove(token - 1);
             return
         }
 
@@ -265,12 +265,12 @@ impl Data {
         let index = if token == 0 {
             let source = MioSocket { inner: socket };
             let stream = PollEvented::new(source, &self.handle).unwrap();
-            if !state.sockets.has_available() {
+            if !(state.sockets.capacity() > state.handles.len()) {
                 let len = state.sockets.len();
                 state.sockets.reserve_exact(len);
             }
-            let entry = state.sockets.vacant_entry().unwrap();
-            let index = entry.index();
+            let entry = state.sockets.vacant_entry();
+            let index = entry.key();
             entry.insert(SocketEntry {
                 want: None,
                 changed: false,
@@ -324,12 +324,12 @@ impl Data {
             // Add the handle to the `handles` slab, acquiring its token we'll
             // use.
             let mut state = self.state.borrow_mut();
-            if !state.handles.has_available() {
+            if !(state.handles.capacity() > state.handles.len()) {
                 let len = state.handles.len();
                 state.handles.reserve_exact(len);
             }
-            let entry = state.handles.vacant_entry().unwrap();
-            let index = entry.index();
+            let entry = state.handles.vacant_entry();
+            let index = entry.key();
             handle.set_token(index).unwrap();
             entry.insert(HandleEntry {
                 complete: tx,
@@ -360,7 +360,7 @@ impl Data {
             return
         }
         if let Ok(Async::Ready(())) = state.handles[idx].complete.poll_cancel() {
-            let entry = state.handles.remove(idx).unwrap();
+            let entry = state.handles.remove(idx);
             drop(state);
             let handle = entry.handle;
             drop(self.multi.remove(handle));
@@ -442,7 +442,7 @@ impl Data {
             let mut state = self.state.borrow_mut();
             let transfer_err = m.result().unwrap();
             let idx = m.token().unwrap();
-            let entry = state.handles.remove(idx).unwrap();
+            let entry = state.handles.remove(idx);
             debug!("request is now finished: {}", idx);
             drop(state);
             assert!(m.is_for(&entry.handle));
