@@ -1,5 +1,4 @@
 extern crate winapi;
-extern crate ws2_32;
 
 use std::io::{self, Read, Write};
 use std::mem;
@@ -18,7 +17,8 @@ use futures::{Future, Poll, Async};
 use futures::sync::oneshot;
 use futures::executor::{self, Notify};
 use tokio_core::reactor::Handle;
-use self::winapi::fd_set;
+use self::winapi::ctypes::*;
+use self::winapi::um::winsock2::*;
 
 pub struct Session {
     tx: Sender<Message>,
@@ -166,19 +166,19 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
             let mut read: fd_set = mem::zeroed();
             let mut write: fd_set = mem::zeroed();
             let mut except: fd_set = mem::zeroed();
-            let nfds = multi.fdset(Some(&mut read),
-                                   Some(&mut write),
-                                   Some(&mut except)).expect("fdset failure");
-            read.fd_array[read.fd_count as usize] = rx.inner.rx.as_raw_socket();
+            let nfds = multi.fdset2(Some(&mut read),
+                                    Some(&mut write),
+                                    Some(&mut except)).expect("fdset failure");
+            read.fd_array[read.fd_count as usize] = rx.inner.rx.as_raw_socket() as usize;
             read.fd_count += 1;
 
             let timeout = multi.get_timeout().expect("get_timeout failure");
             let mut timeout = timeout.or_else(|| {
                 nfds.map(|_| Duration::from_millis(100))
             }).map(|dur| {
-                winapi::timeval {
-                    tv_sec: dur.as_secs() as winapi::c_long,
-                    tv_usec: (dur.subsec_nanos() / 1000) as winapi::c_long,
+                timeval {
+                    tv_sec: dur.as_secs() as c_long,
+                    tv_usec: (dur.subsec_nanos() / 1000) as c_long,
                 }
             });
 
@@ -193,8 +193,8 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>) {
             let timeout = timeout.as_mut().map(|t| t as *mut _);
             let timeout = timeout.unwrap_or(0 as *mut _);
 
-            let n = ws2_32::select(0, &mut read, &mut write, &mut except, timeout);
-            if n == winapi::SOCKET_ERROR {
+            let n = select(0, &mut read, &mut write, &mut except, timeout);
+            if n == SOCKET_ERROR {
                 panic!("select error: {}", io::Error::last_os_error());
             }
         }
