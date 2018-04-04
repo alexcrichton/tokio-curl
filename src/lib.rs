@@ -82,6 +82,7 @@ use std::io;
 
 use futures::{Future, Poll, Async};
 use curl::easy::Easy;
+use curl::multi::Multi;
 use tokio_core::reactor::Handle;
 
 /// A shared cache for HTTP requests to pool data such as TCP connections
@@ -124,11 +125,19 @@ impl Session {
     /// to hook up all the pieces together. The event loop will also be the I/O
     /// home for this HTTP session. All HTTP I/O will occur on the event loop
     /// thread.
-    ///
-    /// This function returns a future which will resolve to a `Session` once
-    /// it's been initialized.
     pub fn new(handle: Handle) -> Session {
-        Session { inner: imp::Session::new(handle) }
+        Session::with_multi(handle, Multi::new())
+    }
+
+    /// Creates a new HTTP session object with the given event loop and [`Multi`]
+    /// handle. Handlers set on `multi` may be reset depending on the underlying
+    /// platform.
+    /// 
+    /// Also see [`Session::new`].
+    pub fn with_multi(handle: Handle, multi: Multi) -> Session {
+        Session {
+            inner: imp::Session::new(handle, multi),
+        }
     }
 
     /// Execute and HTTP request asynchronously, returning a future representing
