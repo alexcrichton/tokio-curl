@@ -78,9 +78,7 @@ pub struct Perform {
 }
 
 impl Session {
-    pub fn new(handle: Handle) -> Session {
-        let mut m = Multi::new();
-
+    pub fn new(handle: Handle, mut m: Multi) -> Session {
         let (tx, rx) = unbounded();
 
         m.timer_function(move |dur| {
