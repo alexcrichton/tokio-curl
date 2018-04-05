@@ -2,6 +2,7 @@ extern crate winapi;
 
 use std::io::{self, Read, Write};
 use std::mem;
+use std::marker::PhantomData;
 use std::net::{TcpStream, TcpListener};
 use std::os::windows::prelude::*;
 use std::sync::Arc;
@@ -11,8 +12,8 @@ use std::thread;
 use std::time::Duration;
 
 use curl::Error;
-use curl::easy::Easy;
-use curl::multi::{Multi, EasyHandle};
+use curl::easy::{Easy, Easy2, Handler};
+use curl::multi::{Multi, EasyHandle, Easy2Handle};
 use futures::{Future, Poll, Async};
 use futures::sync::oneshot;
 use futures::executor::{self, Notify};
@@ -25,8 +26,19 @@ pub struct Session {
     cnt: Arc<AtomicUsize>,
 }
 
+// A type erased handler type to allow sending Easy2 handles across channels.
+// Relies on internals of the `curl` crate.
+// Watch out on auto trait bounds! Currently, `Send` is required due to usage
+// of threads on Windows.
+struct TypeErasedHandler;
+impl Handler for TypeErasedHandler {}
+
 enum Message {
     Run(Easy, oneshot::Sender<io::Result<(Easy, Option<Error>)>>),
+    Run2(
+        Easy2<TypeErasedHandler>,
+        oneshot::Sender<io::Result<(Easy2<TypeErasedHandler>, Option<Error>)>>,
+    ),
     Done,
 }
 
@@ -48,6 +60,11 @@ struct Channel {
 
 pub struct Perform {
     inner: oneshot::Receiver<io::Result<(Easy, Option<Error>)>>,
+}
+
+pub struct Perform2<H> {
+    inner: oneshot::Receiver<io::Result<(Easy2<TypeErasedHandler>, Option<Error>)>>,
+    _marker: PhantomData<H>,
 }
 
 impl Session {
@@ -85,6 +102,16 @@ impl Session {
         self.tx.send(Message::Run(handle, tx));
         Perform { inner: rx }
     }
+
+    pub fn perform2<H: Handler + Send>(&self, handle: Easy2<H>) -> Perform2<H> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Message::Run2(unsafe { mem::transmute(handle) }, tx));
+        Perform2::<H> {
+            inner: rx,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl Clone for Session {
@@ -118,34 +145,61 @@ impl Future for Perform {
     }
 }
 
-fn run(tx: Sender<Message>, rx: Receiver<Message>, multi: Mutli) {
+impl<H: Handler + Send> Future for Perform2<H> {
+    type Item = (Easy2<H>, Option<Error>);
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, io::Error> {
+        match self.inner.poll().expect("canceled") {
+            Async::Ready(Ok((handle, err))) => unsafe { Ok((mem::transmute(handle), err).into()) },
+            Async::Ready(Err(e)) => Err(e),
+            Async::NotReady => Ok(Async::NotReady),
+        }
+    }
+}
+
+fn run(tx: Sender<Message>, rx: Receiver<Message>, multi: Multi) {
     let mut active = Vec::new();
+    let mut active2 = Vec::new();
     let mut rx_done = false;
     let mut to_remove = Vec::new();
+    let mut to_remove2 = Vec::new();
     let notify = Arc::new(MyNotify { inner: tx.inner });
 
     loop {
         trace!("turn of the loop");
         if !rx_done {
-            enqueue(&rx, &multi, &mut active, &mut rx_done);
+            enqueue(&rx, &multi, &mut active, &mut active2, &mut rx_done);
         }
-        if rx_done && active.len() == 0 {
-            break
+        if rx_done && active.len() == 0 && active2.len() == 0 {
+            break;
         }
 
         multi.perform().expect("perform error");
 
         multi.messages(|msg| {
-            let idx = active.iter()
-                            .position(|m| msg.is_for(&m.0))
-                            .expect("done but not in array?");
-            let (handle, complete) = active.remove(idx);
-            let res = match multi.remove(handle) {
-                Ok(easy) => Ok((easy, msg.result().unwrap().err())),
-                Err(e) => Err(e.into()),
-            };
-            trace!("finishing a request");
-            drop(complete.send(res));
+            let idx = active.iter().position(|m| msg.is_for(&m.0));
+            if let Some(idx) = idx {
+                let (handle, complete) = active.remove(idx);
+                let res = match multi.remove(handle) {
+                    Ok(easy) => Ok((easy, msg.result().unwrap().err())),
+                    Err(e) => Err(e.into()),
+                };
+                trace!("finishing a request");
+                drop(complete.send(res));
+            } else {
+                let idx = active2
+                    .iter()
+                    .position(|m| msg.is_for2(&m.0))
+                    .expect("done but not in array?");
+                let (handle, complete) = active2.remove(idx);
+                let res = match multi.remove2(handle) {
+                    Ok(easy) => Ok((easy, msg.result().unwrap().err())),
+                    Err(e) => Err(e.into()),
+                };
+                trace!("finishing a request");
+                drop(complete.send(res));
+            }
         });
 
         to_remove.truncate(0);
@@ -159,6 +213,19 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>, multi: Mutli) {
             trace!("cancelling a request");
             let (handle, _) = active.remove(i);
             multi.remove(handle).expect("failed to remove");
+        }
+
+        to_remove2.truncate(0);
+        for (i, &mut (_, ref mut complete)) in active2.iter_mut().enumerate() {
+            let mut t = executor::spawn(CheckCancel { inner: complete });
+            if let Ok(Async::Ready(())) = t.poll_future_notify(&notify, 0) {
+                to_remove2.push(i);
+            }
+        }
+        for i in to_remove2.drain(..).rev() {
+            trace!("cancelling a request");
+            let (handle, _) = active2.remove(i);
+            multi.remove2(handle).expect("failed to remove");
         }
 
         unsafe {
@@ -201,14 +268,22 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>, multi: Mutli) {
 
     trace!("we're outta here");
 
-    fn enqueue(rx: &Receiver<Message>,
-               multi: &Multi,
-               active: &mut Vec<(EasyHandle,
-                                 oneshot::Sender<io::Result<(Easy, Option<Error>)>>)>,
-               done: &mut bool) {
+    fn enqueue(
+        rx: &Receiver<Message>,
+        multi: &Multi,
+        active: &mut Vec<(
+            EasyHandle,
+            oneshot::Sender<io::Result<(Easy, Option<Error>)>>,
+        )>,
+        active2: &mut Vec<(
+            Easy2Handle<TypeErasedHandler>,
+            oneshot::Sender<io::Result<(Easy2<TypeErasedHandler>, Option<Error>)>>,
+        )>,
+        done: &mut bool,
+    ) {
         if !rx.drain() {
             trace!("no messages available");
-            return
+            return;
         }
         trace!("looking for some messages");
         while let Some(msg) = rx.recv() {
@@ -221,6 +296,13 @@ fn run(tx: Sender<Message>, rx: Receiver<Message>, multi: Mutli) {
                     trace!("starting a new request");
                     match multi.add(easy) {
                         Ok(handle) => active.push((handle, complete)),
+                        Err(e) => drop(complete.send(Err(e.into()))),
+                    }
+                }
+                Message::Run2(easy, complete) => {
+                    trace!("starting a new request");
+                    match multi.add2(easy) {
+                        Ok(handle) => active2.push((handle, complete)),
                         Err(e) => drop(complete.send(Err(e.into()))),
                     }
                 }

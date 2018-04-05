@@ -7,7 +7,7 @@ extern crate tokio_curl;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use curl::easy::Easy;
+use curl::easy::{Easy, Easy2, Handler, WriteError};
 use futures::future::{self, Future};
 use tokio_core::reactor::{Core, Timeout};
 use tokio_curl::Session;
@@ -47,6 +47,36 @@ fn download_rust_lang() {
 }
 
 #[test]
+fn download2_rust_lang() {
+    drop(env_logger::init());
+    let mut lp = Core::new().unwrap();
+
+    let session = Session::new(lp.handle());
+
+    struct Collector(Vec<u8>);
+
+    impl Handler for Collector {
+        fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
+            self.0.extend_from_slice(data);
+            Ok(data.len())
+        }
+    }
+
+    let mut req = Easy2::new(Collector(Vec::new()));
+    req.get(true).unwrap();
+    req.url("https://www.rust-lang.org").unwrap();
+
+    let requests = session.perform2(req).map(move |mut resp| {
+        assert_eq!(resp.response_code().unwrap(), 200);
+        let handler = resp.get_ref();
+        let response = String::from_utf8_lossy(&handler.0);
+        assert!(response.contains("<html>"));
+    });
+
+    lp.run(requests).unwrap();
+}
+
+#[test]
 fn timeout_download_rust_lang() {
     drop(env_logger::init());
     let mut lp = Core::new().unwrap();
@@ -60,14 +90,12 @@ fn timeout_download_rust_lang() {
     let req = session.perform(req).map_err(|err| err.into_error());
 
     let timeout = Timeout::new(Duration::from_millis(5), &lp.handle()).unwrap();
-    let result = req.map(Ok).select(timeout.map(Err)).then(|res| {
-        match res {
-            Ok((Ok(_), _)) => {
-                panic!("should have timed out");
-            }
-            Ok((Err(()), _)) => future::ok::<(), ()>(()),
-            Err((e, _)) => panic!("I/O error: {}", e),
+    let result = req.map(Ok).select(timeout.map(Err)).then(|res| match res {
+        Ok((Ok(_), _)) => {
+            panic!("should have timed out");
         }
+        Ok((Err(()), _)) => future::ok::<(), ()>(()),
+        Err((e, _)) => panic!("I/O error: {}", e),
     });
 
     lp.run(result).unwrap();
@@ -84,9 +112,7 @@ fn download_then_download() {
     req.get(true).unwrap();
     req.url("https://www.rust-lang.org").unwrap();
     req.write_function(|data| Ok(data.len())).unwrap();
-    let test = session.perform(req).and_then(|req| {
-        session.perform(req)
-    });
+    let test = session.perform(req).and_then(|req| session.perform(req));
 
     lp.run(test).unwrap();
 }
@@ -99,7 +125,8 @@ fn drop_a_clone() {
     let mut req = Easy::new();
     req.custom_request("GET").unwrap();
     req.url("https://www.rust-lang.org").unwrap();
-    let res = session.perform(req)
+    let res = session
+        .perform(req)
         .then(|_resp| {
             let mut req2 = Easy::new();
             req2.custom_request("GET").unwrap();

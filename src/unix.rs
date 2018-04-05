@@ -6,19 +6,21 @@ use std::cell::RefCell;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
+use std::marker::PhantomData;
+use std::mem;
 
-use curl::{self, Error};
-use curl::easy::Easy;
-use curl::multi::{Multi, EasyHandle, Socket, SocketEvents, Events};
-use futures::{Future, Poll, Async};
-use futures::executor::{self, Notify};
-use futures::task::{self, AtomicTask};
-use futures::sync::mpsc::{unbounded, UnboundedSender, UnboundedReceiver};
-use futures::sync::oneshot;
-use futures::stream::{Stream, Fuse};
-use tokio_core::reactor::{Timeout, Handle, PollEvented};
 use self::mio::unix::EventedFd;
 use self::slab::Slab;
+use curl::easy::{Easy, Easy2, Handler};
+use curl::multi::{Easy2Handle, EasyHandle, Events, Multi, Socket, SocketEvents};
+use curl::{self, Error};
+use futures::executor::{self, Notify};
+use futures::stream::{Fuse, Stream};
+use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::sync::oneshot;
+use futures::task::{self, AtomicTask};
+use futures::{Async, Future, Poll};
+use tokio_core::reactor::{Handle, PollEvented, Timeout};
 
 use stack::Stack;
 
@@ -28,8 +30,19 @@ pub struct Session {
     tx: RefCell<UnboundedSender<Message>>,
 }
 
+// A type erased handler type to allow sending Easy2 handles across channels.
+// Relies on internals of the `curl` crate.
+// Watch out on auto trait bounds! Currently, `Send` is required due to usage
+// of threads on Windows.
+struct TypeErasedHandler;
+impl Handler for TypeErasedHandler {}
+
 enum Message {
     Execute(Easy, oneshot::Sender<io::Result<(Easy, Option<Error>)>>),
+    Execute2(
+        Easy2<TypeErasedHandler>,
+        oneshot::Sender<io::Result<(Easy2<TypeErasedHandler>, Option<Error>)>>,
+    ),
 }
 
 struct Data {
@@ -54,9 +67,15 @@ struct State {
     timeout: TimeoutState,
 }
 
-struct HandleEntry {
-    complete: oneshot::Sender<io::Result<(Easy, Option<Error>)>>,
-    handle: EasyHandle,
+enum HandleEntry {
+    Easy {
+        complete: oneshot::Sender<io::Result<(Easy, Option<Error>)>>,
+        handle: EasyHandle,
+    },
+    Easy2 {
+        complete: oneshot::Sender<io::Result<(Easy2<TypeErasedHandler>, Option<Error>)>>,
+        handle: Easy2Handle<TypeErasedHandler>,
+    },
 }
 
 struct SocketEntry {
@@ -77,42 +96,49 @@ pub struct Perform {
     inner: oneshot::Receiver<io::Result<(Easy, Option<Error>)>>,
 }
 
+pub struct Perform2<H: Handler + Send> {
+    inner: oneshot::Receiver<io::Result<(Easy2<TypeErasedHandler>, Option<Error>)>>,
+    _marker: PhantomData<H>,
+}
+
 impl Session {
     pub fn new(handle: Handle, mut m: Multi) -> Session {
         let (tx, rx) = unbounded();
 
         m.timer_function(move |dur| {
             if !DATA.is_set() {
-                return true
+                return true;
             }
             DATA.with(|d| d.schedule_timeout(dur))
         }).unwrap();
 
         m.socket_function(move |socket, events, token| {
             if !DATA.is_set() {
-                return
+                return;
             }
             DATA.with(|d| d.schedule_socket(socket, events, token))
         }).unwrap();
 
-        handle.clone().spawn(Data {
-            rx: rx.fuse(),
-            multi: m,
-            handle: handle,
-            notify: Arc::new(MyNotify {
-                stack: Stack::new(),
-                task: AtomicTask::new(),
-            }),
-            state: RefCell::new(State {
-                handles: Slab::with_capacity(128),
-                sockets: Slab::with_capacity(128),
-                timeout: TimeoutState::None,
-            }),
-        }.map_err(|e| {
-            panic!("error while processing http requests: {}", e)
-        }));
+        handle.clone().spawn(
+            Data {
+                rx: rx.fuse(),
+                multi: m,
+                handle: handle,
+                notify: Arc::new(MyNotify {
+                    stack: Stack::new(),
+                    task: AtomicTask::new(),
+                }),
+                state: RefCell::new(State {
+                    handles: Slab::with_capacity(128),
+                    sockets: Slab::with_capacity(128),
+                    timeout: TimeoutState::None,
+                }),
+            }.map_err(|e| panic!("error while processing http requests: {}", e)),
+        );
 
-        Session { tx: RefCell::new(tx) }
+        Session {
+            tx: RefCell::new(tx),
+        }
     }
 
     pub fn perform(&self, handle: Easy) -> Perform {
@@ -123,6 +149,18 @@ impl Session {
             .expect("driver task has gone away");
         Perform { inner: rx }
     }
+
+    pub fn perform2<H: Handler + Send>(&self, handle: Easy2<H>) -> Perform2<H> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .borrow_mut()
+            .unbounded_send(Message::Execute2(unsafe { mem::transmute(handle) }, tx))
+            .expect("driver task has gone away");
+        Perform2::<H> {
+            inner: rx,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl Future for Perform {
@@ -132,6 +170,19 @@ impl Future for Perform {
     fn poll(&mut self) -> Poll<Self::Item, io::Error> {
         match self.inner.poll().expect("complete canceled") {
             Async::Ready(Ok(res)) => Ok(res.into()),
+            Async::Ready(Err(e)) => Err(e),
+            Async::NotReady => Ok(Async::NotReady),
+        }
+    }
+}
+
+impl<H: Handler + Send> Future for Perform2<H> {
+    type Item = (Easy2<H>, Option<Error>);
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, io::Error> {
+        match self.inner.poll().expect("complete canceled") {
+            Async::Ready(Ok((handle, err))) => unsafe { Ok((mem::transmute(handle), err).into()) },
             Async::Ready(Err(e)) => Err(e),
             Async::NotReady => Ok(Async::NotReady),
         }
@@ -230,10 +281,7 @@ impl Data {
     /// token, `token`. It's up to us to ensure that we're waiting appropriately
     /// for these events to happen, and then we'll later inform libcurl when
     /// they actually happen.
-    fn schedule_socket(&self,
-                       socket: Socket,
-                       events: SocketEvents,
-                       token: usize) {
+    fn schedule_socket(&self, socket: Socket, events: SocketEvents, token: usize) {
         let mut state = self.state.borrow_mut();
 
         // First up, if libcurl wants us to forget about this socket, we do so!
@@ -249,7 +297,7 @@ impl Data {
             assert!(token > 0);
             debug!("remove socket: {} / {}", socket, token - 1);
             state.sockets.remove(token - 1);
-            return
+            return;
         }
 
         // If this is the first time we've seen the socket then we register a
@@ -274,7 +322,9 @@ impl Data {
                 changed: false,
                 stream: stream,
             });
-            self.multi.assign(socket, index + 1).expect("failed to assign");
+            self.multi
+                .assign(socket, index + 1)
+                .expect("failed to assign");
             debug!("schedule new socket {} / {}", socket, index);
             index
         } else {
@@ -303,20 +353,32 @@ impl Data {
                 Async::Ready(None) => break,
                 Async::NotReady => break,
             };
-            let (easy, tx) = match msg {
-                Message::Execute(easy, tx) => (easy, tx),
-            };
 
             // Add the easy handle to the multi handle, beginning the HTTP
             // request. This may entail libcurl requesting a new timeout or new
             // sockets to be tracked as part of the call to `add`.
             debug!("executing a new request");
-            let mut handle = match DATA.set(self, || self.multi.add(easy)) {
-                Ok(handle) => handle,
-                Err(e) => {
-                    drop(tx.send(Err(e.into())));
-                    continue
-                }
+            let mut handle = match msg {
+                Message::Execute(easy, tx) => match DATA.set(self, || self.multi.add(easy)) {
+                    Ok(handle) => HandleEntry::Easy {
+                        complete: tx,
+                        handle: handle,
+                    },
+                    Err(e) => {
+                        drop(tx.send(Err(e.into())));
+                        continue;
+                    }
+                },
+                Message::Execute2(easy, tx) => match DATA.set(self, || self.multi.add2(easy)) {
+                    Ok(handle) => HandleEntry::Easy2 {
+                        complete: tx,
+                        handle: handle,
+                    },
+                    Err(e) => {
+                        drop(tx.send(Err(e.into())));
+                        continue;
+                    }
+                },
             };
 
             // Add the handle to the `handles` slab, acquiring its token we'll
@@ -328,11 +390,11 @@ impl Data {
             }
             let entry = state.handles.vacant_entry();
             let index = entry.key();
-            handle.set_token(index).unwrap();
-            entry.insert(HandleEntry {
-                complete: tx,
-                handle: handle,
-            });
+            match &mut handle {
+                HandleEntry::Easy { handle, .. } => handle.set_token(index).unwrap(),
+                HandleEntry::Easy2 { handle, .. } => handle.set_token(index).unwrap(),
+            }
+            entry.insert(handle);
 
             // Enqueue a request to poll the state of the `complete` half so we
             // can get a notification when it goes away.
@@ -355,13 +417,28 @@ impl Data {
         // See if this request has been canceled
         let mut state = self.state.borrow_mut();
         if state.handles.get_mut(idx).is_none() {
-            return
+            return;
         }
-        if let Ok(Async::Ready(())) = state.handles[idx].complete.poll_cancel() {
-            let entry = state.handles.remove(idx);
-            drop(state);
-            let handle = entry.handle;
-            drop(self.multi.remove(handle));
+        let remove = match &mut state.handles[idx] {
+            HandleEntry::Easy { complete, .. } => {
+                complete.poll_cancel() == Ok(Async::Ready(()))
+            }
+            HandleEntry::Easy2 { complete, .. } => {
+                complete.poll_cancel() == Ok(Async::Ready(()))
+            }
+        };
+        if remove {
+            let handle = state.handles.remove(idx);
+            match handle {
+                HandleEntry::Easy { handle, .. } => {
+                    drop(state);
+                    drop(self.multi.remove(handle));
+                }
+                HandleEntry::Easy2 { handle, .. } => {
+                    drop(state);
+                    drop(self.multi.remove2(handle));
+                }
+            }
         }
     }
 
@@ -374,7 +451,7 @@ impl Data {
         // If this socket has gone away ignore this notification
         if state.sockets.get(idx).is_none() {
             debug!("socket is gone");
-            return
+            return;
         }
 
         if state.sockets[idx].stream.poll_read().is_ready() {
@@ -388,7 +465,7 @@ impl Data {
             set = true;
         }
         if !set {
-            return
+            return;
         }
 
         state.sockets[idx].changed = false;
@@ -417,17 +494,15 @@ impl Data {
         // again that we should time out, so execute this in a loop.
         loop {
             match self.state.borrow_mut().timeout {
-                TimeoutState::Waiting(ref mut t) => {
-                    match t.poll() {
-                        Ok(Async::Ready(())) => {}
-                        _ => {
-                            debug!("timeout not ready");
-                            return
-                        }
+                TimeoutState::Waiting(ref mut t) => match t.poll() {
+                    Ok(Async::Ready(())) => {}
+                    _ => {
+                        debug!("timeout not ready");
+                        return;
                     }
-                }
+                },
                 TimeoutState::Ready => {}
-                TimeoutState::None => return
+                TimeoutState::None => return,
             }
             debug!("timeout fired");
             self.state.borrow_mut().timeout = TimeoutState::None;
@@ -443,17 +518,31 @@ impl Data {
             let entry = state.handles.remove(idx);
             debug!("request is now finished: {}", idx);
             drop(state);
-            assert!(m.is_for(&entry.handle));
 
             // If `remove_err` fails then that's super fatal, so that'll end
             // up in the `Error` of the `Perform` future. If, however, the
             // transfer just failed, then that's communicated through
             // `transfer_err`, so we just put that next to the handle if we
             // get it out successfully.
-            let remove_err = self.multi.remove(entry.handle);
-            let res = remove_err.map(|e| (e, transfer_err.err()))
-                                .map_err(|e| e.into());
-            drop(entry.complete.send(res));
+
+            match entry {
+                HandleEntry::Easy { handle, complete } => {
+                    assert!(m.is_for(&handle));
+                    let remove_err = self.multi.remove(handle);
+                    let res = remove_err
+                        .map(|e| (e, transfer_err.err()))
+                        .map_err(|e| e.into());
+                    drop(complete.send(res));
+                }
+                HandleEntry::Easy2 { handle, complete } => {
+                    assert!(m.is_for2(&handle));
+                    let remove_err = self.multi.remove2(handle);
+                    let res = remove_err
+                        .map(|e| (e, transfer_err.err()))
+                        .map_err(|e| e.into());
+                    drop(complete.send(res));
+                }
+            }
         });
     }
 }
@@ -534,11 +623,13 @@ struct MioSocket {
 }
 
 impl mio::Evented for MioSocket {
-    fn register(&self,
-                poll: &mio::Poll,
-                token: mio::Token,
-                interest: mio::Ready,
-                opts: mio::PollOpt) -> io::Result<()> {
+    fn register(
+        &self,
+        poll: &mio::Poll,
+        token: mio::Token,
+        interest: mio::Ready,
+        opts: mio::PollOpt,
+    ) -> io::Result<()> {
         // Curl will periodically ask us to become interested in a socket that
         // we were previously interested in (but then previously became
         // uninterested in as well). When we're removing a socket from curl we
@@ -559,11 +650,13 @@ impl mio::Evented for MioSocket {
         }
     }
 
-    fn reregister(&self,
-                  poll: &mio::Poll,
-                  token: mio::Token,
-                  interest: mio::Ready,
-                  opts: mio::PollOpt) -> io::Result<()> {
+    fn reregister(
+        &self,
+        poll: &mio::Poll,
+        token: mio::Token,
+        interest: mio::Ready,
+        opts: mio::PollOpt,
+    ) -> io::Result<()> {
         EventedFd(&self.inner).reregister(poll, token, interest, opts)
     }
 
