@@ -81,7 +81,7 @@ use std::fmt;
 use std::io;
 
 use futures::{Future, Poll, Async};
-use curl::easy::Easy;
+use curl::easy::{Easy, Easy2, Handler};
 use curl::multi::Multi;
 use tokio_core::reactor::Handle;
 
@@ -107,6 +107,13 @@ pub struct Perform {
     inner: imp::Perform,
 }
 
+/// A future returned from the `Session::perform2` method.
+///
+/// This is as same as [`Perform`] except it uses the Easy2 type from curl.
+pub struct Perform2<H: Handler + Send> {
+    inner: imp::Perform2<H>,
+}
+
 /// Error returned by the future returned from `perform`.
 ///
 /// This error can be converted to an `io::Error` or the underlying `Easy`
@@ -114,6 +121,14 @@ pub struct Perform {
 pub struct PerformError {
     error: io::Error,
     handle: Option<Easy>,
+}
+
+/// Error returned by the future returned from `perform2`.
+///
+/// See also [`PerformError`].
+pub struct Perform2Error<H: Handler + Send> {
+    error: io::Error,
+    handle: Option<Easy2<H>>,
 }
 
 impl Session {
@@ -158,6 +173,14 @@ impl Session {
     pub fn perform(&self, handle: Easy) -> Perform {
         Perform { inner: self.inner.perform(handle) }
     }
+
+    /// Execute and HTTP request asynchronously, returning a future representing
+    /// the request's completion.
+    /// 
+    /// See also [`Session::perform2`].
+    pub fn perform2<H: Handler + Send>(&self, handle: Easy2<H>) -> Perform2<H> {
+        Perform2 { inner: self.inner.perform2(handle) }
+    }
 }
 
 impl Future for Perform {
@@ -170,6 +193,22 @@ impl Future for Perform {
             Ok(Async::Ready((handle, None))) => Ok(Async::Ready(handle)),
             Ok(Async::Ready((handle, Some(err)))) => {
                 Err(PerformError { error: err.into(), handle: Some(handle) })
+            }
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+        }
+    }
+}
+
+impl<H: Handler + Send> Future for Perform2<H> {
+    type Item = Easy2<H>;
+    type Error = Perform2Error<H>;
+
+    fn poll(&mut self) -> Poll<Easy2<H>, Perform2Error<H>> {
+        match self.inner.poll() {
+            Err(e) => Err(Perform2Error { error: e, handle: None }),
+            Ok(Async::Ready((handle, None))) => Ok(Async::Ready(handle)),
+            Ok(Async::Ready((handle, Some(err)))) => {
+                Err(Perform2Error { error: err.into(), handle: Some(handle) })
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),
         }
@@ -198,7 +237,35 @@ impl PerformError {
     /// going to be backed by a `curl::Error` or a `curl::MultiError`.
     ///
     /// It's also likely if it is available the `Easy` handle recovered from
-    /// `take_handle` will have even more detailed information about the error.
+    /// `take_easy` will have even more detailed information about the error.
+    pub fn into_error(self) -> io::Error {
+        self.error
+    }
+}
+
+impl<H: Handler + Send> Perform2Error<H> {
+    /// Attempts to extract the underlying `Easy2` handle, if one is available.
+    ///
+    /// For some HTTP requests that fail the `Easy2` handle is still available to
+    /// recycle for another request. Additionally, the handle may contain
+    /// information about the failed request. If this is needed, then this
+    /// method can be called to extract the easy handle.
+    ///
+    /// Note that not all failed HTTP requests will have an easy handle
+    /// available to return. Some requests may end up destroying the original
+    /// easy handle as it couldn't be reclaimed.
+    pub fn take_easy2(&mut self) -> Option<Easy2<H>> {
+        self.handle.take()
+    }
+
+    /// Returns the underlying I/O error that caused this error.
+    ///
+    /// All `Perform2Error` structures will have an associated I/O error with
+    /// them. This error indicates why the HTTP request failed, and is likely
+    /// going to be backed by a `curl::Error` or a `curl::MultiError`.
+    ///
+    /// It's also likely if it is available the `Easy2` handle recovered from
+    /// `take_easy2` will have even more detailed information about the error.
     pub fn into_error(self) -> io::Error {
         self.error
     }
@@ -206,6 +273,12 @@ impl PerformError {
 
 impl From<PerformError> for io::Error {
     fn from(p: PerformError) -> io::Error {
+        p.into_error()
+    }
+}
+
+impl<H: Handler + Send> From<Perform2Error<H>> for io::Error {
+    fn from(p: Perform2Error<H>) -> io::Error {
         p.into_error()
     }
 }
@@ -225,6 +298,30 @@ impl fmt::Debug for PerformError {
 }
 
 impl error::Error for PerformError {
+    fn description(&self) -> &str {
+        "failed to execute request"
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        Some(&self.error)
+    }
+}
+
+impl<H: Handler + Send> fmt::Display for Perform2Error<H> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        "failed to execute request".fmt(f)
+    }
+}
+
+impl<H: Handler + Send> fmt::Debug for Perform2Error<H> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("PerformError")
+         .field("error", &self.error)
+         .finish()
+    }
+}
+
+impl<H: Handler + Send> error::Error for Perform2Error<H> {
     fn description(&self) -> &str {
         "failed to execute request"
     }
