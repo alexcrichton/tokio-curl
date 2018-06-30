@@ -51,7 +51,7 @@ pub struct Perform {
 }
 
 impl Session {
-    pub fn new(_handle: Handle, multi: Multi) -> Session {
+    pub fn new(_handle: Handle) -> Session {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let conn1 = TcpStream::connect(&addr).unwrap();
@@ -71,7 +71,7 @@ impl Session {
         let rx = Receiver { rx: rx, inner: inner };
 
         thread::spawn(|| {
-            run(tx2, rx, multi);
+            run(tx2, rx);
         });
 
         Session {
@@ -118,7 +118,8 @@ impl Future for Perform {
     }
 }
 
-fn run(tx: Sender<Message>, rx: Receiver<Message>, multi: Mutli) {
+fn run(tx: Sender<Message>, rx: Receiver<Message>) {
+    let multi = Multi::new();
     let mut active = Vec::new();
     let mut rx_done = false;
     let mut to_remove = Vec::new();
