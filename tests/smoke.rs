@@ -39,7 +39,7 @@ fn download_rust_lang() {
         assert_eq!(resp.response_code().unwrap(), 200);
         let response = response.lock().unwrap();
         let response = String::from_utf8_lossy(&response);
-        assert!(response.contains("<html>"));
+        assert!(response.contains("<html"));
         assert!(headers.lock().unwrap().len() > 0);
     });
 
