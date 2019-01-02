@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Perform","A future returned from the `Session::perform` method."],["PerformError","Error returned by the future returned from `perform`."],["Session","A shared cache for HTTP requests to pool data such as TCP connections between."]]});
