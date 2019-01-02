@@ -3,7 +3,7 @@
 An implementation of an asynchronous HTTP client using futures backed by
 libcurl.
 
-[![Build Status](https://travis-ci.org/tokio-rs/tokio-curl.svg?branch=master)](https://travis-ci.org/tokio-rs/tokio-curl)
+[![Build Status](https://travis-ci.org/alexcrichton/tokio-curl.svg?branch=master)](https://travis-ci.org/alexcrichton/tokio-curl)
 [![Build status](https://ci.appveyor.com/api/projects/status/1uqcw7g5e5ah3or2?svg=true)](https://ci.appveyor.com/project/alexcrichton/tokio-curl)
 
 [Documentation](https://docs.rs/tokio-curl)
